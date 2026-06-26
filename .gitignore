@@ -1,0 +1,50 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+*.env
+
+# Internal build artifacts
+trade_results/
+trade_results_gm/
+build_notebook.py
+build_github_guide.py
+pending_trades.json
+war_lookup.json
+workflow_args_raw.json
+workflow_trades_input.json
+fill_gm_input.json
+
+# Internal workflow scripts
+fill_trades_workflow.js
+fill_gm_workflow.js
+
+# Internal merge/build scripts
+merge_results.py
+merge_war_reference.py
+merge_gm_results.py
+
+# Internal/backup files
+trades_67only_backup.csv
+new.csv
+GitHub_Portfolio_Guide.docx
+~$*.docx
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Internal agent docs
+CLAUDE.md
+WAR_REFERENCE.md
