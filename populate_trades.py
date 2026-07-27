@@ -34,19 +34,25 @@ import csv
 import argparse
 import datetime
 import math
+import unicodedata
 from pathlib import Path
 
+import pandas as pd
 import requests
 import pybaseball
 
 TRADES_CSV = Path(__file__).parent / "trades.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
+ONEDRIVE_BASE = "C:/Users/zach.thomas/OneDrive - Driveline Baseball/"
 
 FIELDNAMES = [
-    "trade_id", "trade_date", "season", "trade_type", "player_name",
-    "from_team", "to_team", "age_at_trade", "position_group", "is_pitcher",
-    "contract_status", "years_control_remaining", "war_prior_season",
-    "salary_m", "aav_m", "return_tier", "return_summary", "key_pieces", "notes",
+    "trade_id", "player_name", "trade_date", "season", "trade_type",
+    "from_team", "to_team", "num_teams", "position_group", "is_pitcher", "age_at_trade",
+    "contract_status", "years_control_remaining", "salary_m", "aav_m",
+    "war_yr0", "g_yr0", "war_yr1", "g_yr1", "war_yr2", "g_yr2",
+    "war_yr3", "g_yr3", "war_peak", "covid_yr", "wWAR", "war_trend",
+    "trend_label", "yr0_rate", "avail_pct", "avail_grade", "peak_gap",
+    "key_pieces", "return_summary", "return_tier", "return_prospect_grades", "notes",
 ]
 
 
@@ -79,7 +85,9 @@ def lookup_player(name, mlb_id_override=None, fg_id_override=None):
     if mlb_id_override or fg_id_override:
         return fg_id_override, mlb_id_override
 
-    parts = name.strip().split()
+    # For package trades ("A + B + C"), look up only the primary player
+    lookup_name = name.split("+")[0].strip()
+    parts = lookup_name.split()
     first, last = parts[0], " ".join(parts[1:])
     try:
         df = pybaseball.playerid_lookup(last, first, fuzzy=True)
@@ -89,7 +97,8 @@ def lookup_player(name, mlb_id_override=None, fg_id_override=None):
         return None, None
 
     # Prefer players who were active in recent years (avoids matching historical players with same name)
-    recent = df[df.get("mlb_played_last", df.get("mlb_played_first", 0)).fillna(0) >= 2010]
+    _played = pd.to_numeric(df.get("mlb_played_last", df.get("mlb_played_first", pd.Series([0]*len(df)))), errors="coerce").fillna(0)
+    recent = df[_played >= 2010]
     row = recent.iloc[0] if not recent.empty else df.iloc[0]
 
     fg = row.get("key_fangraphs")
@@ -123,40 +132,50 @@ def age_at(birth_str, trade_date):
     return age
 
 
+def _xlsx_path(year, is_pitcher):
+    if is_pitcher:
+        double = Path(f"{ONEDRIVE_BASE}{year}__pitching_war_csv.xlsx")
+        single = Path(f"{ONEDRIVE_BASE}{year}_pitching_war_csv.xlsx")
+        return str(double) if double.exists() else str(single)
+    return f"{ONEDRIVE_BASE}{year}_batting_war_csv.xlsx"
+
+
+def _xlsx_war(player_name, is_pitcher, year):
+    path = _xlsx_path(year, is_pitcher)
+    if not Path(path).exists():
+        return None
+    df = pd.read_excel(path, header=0)
+    war_idx = 20 if is_pitcher else 21
+
+    def _ascii(s):
+        return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+
+    # For package trades ("A + B + C"), search on the first player only
+    search_name = player_name.split("+")[0].strip()
+    parts = _ascii(search_name).split()
+    for _, row in df.iterrows():
+        if all(p in _ascii(row.iloc[0]) for p in parts):
+            try:
+                war = float(row.iloc[war_idx])
+                if not math.isnan(war):
+                    return round(war, 1)
+            except (ValueError, TypeError):
+                continue
+    return None
+
+
 def fetch_war(name, trade_date, is_pitcher, fg_id=None):
     # Jan-May: prior season is the reference. Jun-Dec: current season.
     war_year = trade_date.year - 1 if trade_date.month <= 5 else trade_date.year
-    print(f"  Fetching {war_year} fWAR from FanGraphs...")
-    try:
-        if is_pitcher:
-            df = pybaseball.pitching_stats(war_year, war_year, qual=0)
-        else:
-            df = pybaseball.batting_stats(war_year, war_year, qual=0)
-    except Exception as e:
-        print(f"  WARNING: pybaseball fetch failed: {e}")
-        return None, war_year
-
-    war_col = next((c for c in ("WAR", "fWAR") if c in df.columns), None)
-    id_col  = next((c for c in ("IDfg", "playerid", "key_fangraphs") if c in df.columns), None)
-
-    if war_col is None:
-        print(f"  WARNING: no WAR column found. Columns: {list(df.columns[:10])}")
-        return None, war_year
-
-    # Match by FG ID
-    if fg_id and id_col:
-        match = df[df[id_col].astype(str) == str(fg_id)]
-        if not match.empty:
-            return round(float(match.iloc[0][war_col]), 1), war_year
-
-    # Fuzzy name match
-    name_parts = name.lower().split()
-    name_col = next((c for c in ("Name", "PlayerName") if c in df.columns), None)
-    if name_col:
-        for _, row in df.iterrows():
-            if all(p in str(row[name_col]).lower() for p in name_parts):
-                return round(float(row[war_col]), 1), war_year
-
+    print(f"  Fetching {war_year} fWAR from local xlsx...")
+    war = _xlsx_war(name, is_pitcher, war_year)
+    if war is not None:
+        return war, war_year
+    # Fallback one year (e.g. player missed war_year due to injury)
+    print(f"  Not found in {war_year}, trying {war_year - 1}...")
+    war = _xlsx_war(name, is_pitcher, war_year - 1)
+    if war is not None:
+        return war, war_year - 1
     return None, war_year
 
 
@@ -182,8 +201,9 @@ def main():
     ap.add_argument("--pitcher",  action="store_true")
     ap.add_argument("--salary",   type=float, default=0.0, help="Salary in $M")
     ap.add_argument("--position", help="Position group override")
-    ap.add_argument("--notes",    default="")
-    ap.add_argument("--verified", action="store_true", help="Mark as verified")
+    ap.add_argument("--notes",        default="")
+    ap.add_argument("--relief-role",  default=None, help="Relief role (closer/setup/middle) — stored in notes")
+    ap.add_argument("--verified",     action="store_true", help="Mark as verified")
     args = ap.parse_args()
 
     trade_date = parse_date(args.trade_date)
@@ -229,20 +249,21 @@ def main():
 
     row = {
         "trade_id":                trade_id,
+        "player_name":             args.player,
         "trade_date":              format_date(trade_date),
         "season":                  season,
         "trade_type":              trade_type,
-        "player_name":             args.player,
         "from_team":               args.from_team.upper(),
         "to_team":                 args.to_team.upper(),
-        "age_at_trade":            current_age,
         "position_group":          position,
         "is_pitcher":              1 if args.pitcher else 0,
+        "age_at_trade":            current_age,
         "contract_status":         args.status,
         "years_control_remaining": args.years,
-        "war_prior_season":        war,
         "salary_m":                args.salary,
         "aav_m":                   args.salary,
+        "war_yr1":                 war,
+        "wWAR":                    war,  # single-season approx; re-run merge_war_reference.py to recompute
         "return_tier":             args.tier,
         "return_summary":          f"[Fill in return summary]{unverified_flag}",
         "key_pieces":              "",

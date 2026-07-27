@@ -22,8 +22,11 @@ import csv
 import argparse
 import math
 import datetime
+import unicodedata
 from pathlib import Path
 from urllib.parse import quote_plus
+
+import pandas as pd
 
 import requests
 from bs4 import BeautifulSoup
@@ -42,6 +45,7 @@ MAX_PROJECTION_YEARS = 8  # cap speculation beyond 8 years
 RELIEF_ROLE_LEVERAGE = {"closer": 1.8, "setup": 1.4, "middle": 1.1}
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
+ONEDRIVE_BASE = "C:/Users/zach.thomas/OneDrive - Driveline Baseball/"
 
 
 # ── Aging curve ────────────────────────────────────────────────────────────────
@@ -66,22 +70,63 @@ def arb_salary(market_value_m, arb_year):
     return market_value_m * ARB_RATES.get(arb_year, 0.40)
 
 
-# ── FanGraphs player ID lookup ─────────────────────────────────────────────────
-def lookup_fg_id(player_name):
+# ── Player ID lookup ───────────────────────────────────────────────────────────
+def lookup_player_ids(player_name):
+    """Returns (fg_id, mlbam_id). Either may be None."""
     parts = player_name.strip().split()
     first, last = parts[0], " ".join(parts[1:])
     try:
         df = pybaseball.playerid_lookup(last, first, fuzzy=True)
     except Exception as e:
         print(f"  playerid_lookup error: {e}")
-        return None
+        return None, None
     if df.empty:
-        return None
+        return None, None
     row = df.iloc[0]
-    val = row.get("key_fangraphs")
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return None
-    return str(int(val))
+    fg  = row.get("key_fangraphs")
+    mlb = row.get("key_mlbam")
+    fg_id    = None if (fg  is None or (isinstance(fg,  float) and math.isnan(fg)))  else str(int(fg))
+    mlbam_id = None if (mlb is None or (isinstance(mlb, float) and math.isnan(mlb))) else int(mlb)
+    matched  = f"{row.get('name_first', '')} {row.get('name_last', '')}".strip()
+    print(f"  Matched: {matched}")
+    return fg_id, mlbam_id
+
+
+# ── Local fWAR xlsx lookup (replaces broken FanGraphs leaderboard API) ─────────
+def _xlsx_path(year, is_pitcher):
+    if is_pitcher:
+        double = Path(f"{ONEDRIVE_BASE}{year}__pitching_war_csv.xlsx")
+        single = Path(f"{ONEDRIVE_BASE}{year}_pitching_war_csv.xlsx")
+        return str(double) if double.exists() else str(single)
+    return f"{ONEDRIVE_BASE}{year}_batting_war_csv.xlsx"
+
+
+def fetch_war_from_xlsx(player_name, is_pitcher, year):
+    """
+    Look up fWAR from local OneDrive xlsx (qual=0). Returns (war, games) or (None, None).
+    Column layout: WAR at index 21 (bat) / 20 (pit); G at index 2 (bat) / 5 (pit).
+    """
+    path = _xlsx_path(year, is_pitcher)
+    if not Path(path).exists():
+        return None, None
+    df = pd.read_excel(path, header=0)
+    war_idx = 20 if is_pitcher else 21
+    g_idx   =  5 if is_pitcher else  2
+
+    def _ascii(s):
+        return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+
+    parts = _ascii(player_name).split()
+    for _, row in df.iterrows():
+        if all(p in _ascii(row.iloc[0]) for p in parts):
+            try:
+                war = float(row.iloc[war_idx])
+                g   = int(row.iloc[g_idx])
+                if not math.isnan(war):
+                    return round(war, 1), g
+            except (ValueError, TypeError):
+                continue
+    return None, None
 
 
 # ── MLB Stats API — age and position from MLBAM ID ────────────────────────────
@@ -99,37 +144,60 @@ def fetch_mlb_player_info(mlbam_id):
     }
 
 
-# ── FanGraphs ZiPS projections ─────────────────────────────────────────────────
-def fetch_zips(player_name, is_pitcher, fg_id=None):
+def fetch_current_season_gs(mlbam_id, is_pitcher):
+    """Fetch current-season GS (SP) or G (hitter/RP) from MLB Stats API."""
+    group = "pitching" if is_pitcher else "hitting"
+    resp = requests.get(
+        f"https://statsapi.mlb.com/api/v1/people/{mlbam_id}/stats",
+        params={"stats": "season", "season": CURRENT_YEAR, "group": group},
+        headers=HEADERS,
+        timeout=15,
+    )
+    resp.raise_for_status()
+    splits = resp.json().get("stats", [{}])[0].get("splits", [])
+    if not splits:
+        return None
+    stat = splits[0].get("stat", {})
+    return stat.get("gamesStarted") if is_pitcher else stat.get("gamesPlayed")
+
+
+# ── FanGraphs projection API (ZiPS, THE BAT X, Steamer, etc.) ─────────────────
+def fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id=None):
+    """
+    Fetch a FanGraphs projection row for one player.
+    proj_type: 'zips' | 'thebatx' | 'steamer' | 'atc' | 'fangraphsdc'
+    Returns the matching row dict, or None if not found.
+    """
     stats = "pit" if is_pitcher else "bat"
     url = (
-        "https://www.fangraphs.com/api/projections"
-        f"?type=zips&stats={stats}&pos=all&team=0&players=0"
+        f"https://www.fangraphs.com/api/projections"
+        f"?type={proj_type}&stats={stats}&pos=all&team=0&players=0"
     )
     resp = requests.get(url, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     data = resp.json()
 
-    # Prefer match by FG player ID (most precise)
     if fg_id:
         for row in data:
             if str(row.get("playerid", "")) == fg_id:
                 return row
 
-    # Exact name match
     name_lower = player_name.lower()
     for row in data:
         if row.get("PlayerName", "").lower() == name_lower:
             return row
 
-    # Fuzzy: all name parts present
     parts = name_lower.split()
     matches = [r for r in data if all(p in r.get("PlayerName", "").lower() for p in parts)]
     if len(matches) > 1:
-        print(f"  Multiple ZiPS matches — using first:")
-        for m in matches:
-            print(f"    {m['PlayerName']} ({m.get('Team', '?')})")
+        print(f"  Multiple {proj_type} matches — using first: "
+              + ", ".join(f"{m['PlayerName']} ({m.get('Team','?')})" for m in matches))
     return matches[0] if matches else None
+
+
+# Keep old name as alias so deadline_board.py / any other callers don't break
+def fetch_zips(player_name, is_pitcher, fg_id=None):
+    return fetch_fg_projection(player_name, is_pitcher, "zips", fg_id)
 
 
 # ── FanGraphs Roster Resource contract data ───────────────────────────────────
@@ -364,12 +432,15 @@ def parse_spotrac(html):
 
             yearly.append({"year": yr, "status": raw_status, "salary_m": sal_m})
 
+    # UFA rows are not controlled years — strip them before any downstream logic.
+    yearly = [r for r in yearly if r["status"].upper() != "UFA"]
+
     # Determine overall contract status.
-    # If the table has any blank-status or "club/team/vesting/ufa" rows after arb rows,
+    # If the table has any blank-status or "club/team/vesting" rows after arb rows,
     # the player is on a signed extension (arb salaries are negotiated as part of the deal).
     def _is_extension_row(st):
         stl = st.lower()
-        return st == "" or stl in ("club", "team", "ufa", "signed", "extension", "vesting")
+        return st == "" or stl in ("club", "team", "signed", "extension", "vesting")
 
     has_extension_years = any(_is_extension_row(r["status"]) for r in yearly)
     spotrac_status = yearly[0]["status"] if yearly else ""
@@ -484,9 +555,15 @@ def build_control_years(contract, current_age, war_projections):
         market_value = war * DOLLARS_PER_WAR
         discount_factor = 1.0 / ((1 + DISCOUNT_RATE) ** i)
 
-        # Check if this year is a UFA year (no team control, no surplus)
+        # Check if this year is a UFA year (no team control, no surplus).
+        # Skip UFA detection if user overrode years and this year is within the override window
+        # (FanGraphs commonly returns a trailing UFA entry for years that are actually under contract).
+        years_override = contract.get("_years_override")
         spotrac_row = next((r for r in contract.get("yearly", []) if r["year"] == yr), {})
-        if spotrac_row.get("status", "").upper() == "UFA":
+        is_ufa = spotrac_row.get("status", "").upper() == "UFA"
+        if years_override is not None and i < years_override:
+            is_ufa = False  # override wins; user knows the correct contract length
+        if is_ufa:
             salary = market_value
             salary_type = "UFA"
         # Use Spotrac salary if we have it for this year
@@ -534,6 +611,8 @@ def build_control_years(contract, current_age, war_projections):
 
 def contract_n_years(contract):
     """How many years to project based on remaining contract control."""
+    if contract.get("_years_override") is not None:
+        return contract["_years_override"]
     status = contract.get("status", "")
     if status == "pre-arb":
         service_time = contract.get("service_time") or 0.0
@@ -560,10 +639,38 @@ def trade_value_for_war(war_y1, current_age, contract):
 # Higher tiers (7+) have cleaner separation; tiers 2-5 overlap due to rental
 # compression (1-year deals suppress talent value regardless of player quality).
 
+# Thresholds recalibrated 2026-07-21: ×1.20 vs original to correct systematic
+# +1.56-tier overestimation found in 321-trade back-test.
 _TALENT_THRESHOLDS = [
-    (120, 10), (80, 9), (55, 8), (35, 7),
-    (20, 6), (12, 5), (6, 4), (2, 3), (0, 2),
+    (144, 10), (96, 9), (66, 8), (42, 7),
+    (24, 6), (14, 5), (7, 4), (2, 3), (0, 2),
 ]
+
+# Development discount on talent_value by service class.
+# Pre-arb/arb players have meaningful bust risk; the surplus formula is optimistic
+# because it projects full career value at wWAR with no probability-of-sticking haircut.
+# Applied only to talent_tier and contract_adj ratio — not to the surplus table display.
+_DEVELOPMENT_FACTORS = {
+    "pre-arb": 0.70,
+    "arb1":    0.80,
+    "arb":     0.85,   # FanGraphs generic "arb" — treat as arb2 equivalent
+    "arb2":    0.90,
+    "arb3":    0.95,
+    "rental":  1.00,
+    "signed":  1.00,
+}
+
+# Hard net-tier ceiling for pre-arb and arb1 players, derived empirically
+# from the p90 of actual return_tier by wWAR bucket across 321 verified trades.
+# These statuses have the highest bust risk; arb2/arb3 rely on the dev discount only.
+# Threshold list: [(wWAR_min, max_net_tier), ...] — first match wins (highest wWAR first).
+_UNPROVEN_TIER_CAPS = [
+    (4.0, 10),   # proven star — no meaningful cap
+    (2.5,  8),   # solid performer — p90 actual = 7 in data
+    (1.0,  6),   # below-average — p90 actual = 5.6; cap at 6 allows outliers
+    (0.0,  5),   # fringe — p90 actual = 4.0; cap at 5 allows outliers
+]
+_UNPROVEN_STATUSES = {"pre-arb", "arb1"}
 
 _TALENT_LABELS = {
     10: "franchise player",  9: "perennial All-Star",
@@ -627,7 +734,9 @@ def calc_trade_tiers(war_y1, current_age, contract):
       overpay_m      — $M the trading team is overpaying annually (positive = overpaid)
     """
     n = contract_n_years(contract)
-    tv = calc_talent_value(war_y1, current_age, n)
+    tv_raw = calc_talent_value(war_y1, current_age, n)
+    dev_factor = _DEVELOPMENT_FACTORS.get(contract.get("status", "signed"), 1.0)
+    tv = round(tv_raw * dev_factor, 1)
     spv = calc_salary_pv(contract, current_age, war_y1)
 
     # Talent tier
@@ -637,7 +746,7 @@ def calc_trade_tiers(war_y1, current_age, contract):
             tt = tier
             break
 
-    # Contract adjustment: salary burden vs talent value ratio
+    # Contract adjustment: salary burden vs development-adjusted talent value
     ratio = spv / tv if tv > 0 else 2.0
     if ratio < 0.25:   cadj =  3
     elif ratio < 0.45: cadj =  2
@@ -661,10 +770,24 @@ def calc_trade_tiers(war_y1, current_age, contract):
 
     net = max(-3, min(10, tt + cadj + severity_pen))
 
-    # Annual overpay: current year salary vs current year market value
-    aav = contract.get("aav") or 0.0
+    # Empirical cap for unproven controlled players: surplus formula overvalues
+    # multi-year cheap contracts for players who haven't proven they'll stick.
+    # Cap derived from p90 of actual return_tier by wWAR bucket (321-trade back-test).
+    status = contract.get("status", "signed")
+    tier_cap = None
+    if status in _UNPROVEN_STATUSES:
+        for wWAR_min, cap in _UNPROVEN_TIER_CAPS:
+            if war_y1 >= wWAR_min:
+                tier_cap = cap
+                break
+        if tier_cap is not None:
+            net = min(net, tier_cap)
+
+    # Annual overpay: Year 1 actual salary vs current year market value.
+    # Use ctrl_rows[0] rather than AAV — FanGraphs AAV can be stale for option-year contracts.
+    yr1_salary = ctrl_rows[0]["salary"] if ctrl_rows else (contract.get("aav") or 0.0)
     market_now = war_y1 * DOLLARS_PER_WAR
-    overpay = round(aav - market_now, 1) if aav else 0.0
+    overpay = round(yr1_salary - market_now, 1) if yr1_salary else 0.0
 
     return {
         "talent_value":  tv,
@@ -674,6 +797,8 @@ def calc_trade_tiers(war_y1, current_age, contract):
         "net_tier":      net,
         "overpay_m":     overpay,
         "total_surplus": round(total_surplus, 1),
+        "dev_factor":    dev_factor,
+        "tier_cap":      tier_cap,
     }
 
 
@@ -710,20 +835,26 @@ def _contract_context(contract, current_age, war_y1):
     if status == "signed":
         yearly = contract.get("yearly", [])
         end_yr = yearly[-1]["year"] if yearly else CURRENT_YEAR + n_yrs - 1
-        if aav and market > 0:
-            pct = aav / market
+        # Use Year 1 actual salary for market% — FanGraphs AAV can be stale for option-year contracts.
+        wars = project_wars(max(0.0, war_y1), current_age, n=n_yrs)
+        ctrl_rows = build_control_years(contract, current_age, wars)
+        yr1_salary = ctrl_rows[0]["salary"] if ctrl_rows else aav
+        salary_for_pct = yr1_salary if yr1_salary else aav
+        if salary_for_pct and market > 0:
+            pct = salary_for_pct / market
             if pct < 0.5:
-                deal_read = f"VERY team-friendly (AAV is {pct:.0%} of current market value)"
+                deal_read = f"VERY team-friendly (Year 1 salary is {pct:.0%} of current market value)"
             elif pct < 0.8:
-                deal_read = f"team-friendly (AAV is {pct:.0%} of current market value)"
+                deal_read = f"team-friendly (Year 1 salary is {pct:.0%} of current market value)"
             elif pct < 1.1:
-                deal_read = f"near-market rate (AAV is {pct:.0%} of current market value)"
+                deal_read = f"near-market rate (Year 1 salary is {pct:.0%} of current market value)"
             else:
-                deal_read = f"above market (AAV is {pct:.0%} of current market value — aging risk)"
+                deal_read = f"above market (Year 1 salary is {pct:.0%} of current market value — aging risk)"
         else:
             deal_read = "contract terms on file"
+        salary_label = f"${yr1_salary:.2f}M/yr" if yr1_salary and abs(yr1_salary - aav) > 0.5 else f"${aav:.2f}M AAV"
         return (
-            f"Signed through {end_yr} at ${aav:.2f}M AAV — {deal_read}. "
+            f"Signed through {end_yr} at {salary_label} — {deal_read}. "
             f"{n_yrs} year(s) of control remaining."
         )
     return ""
@@ -757,7 +888,7 @@ def _aging_arc_summary(control_rows, current_age):
 
 
 # ── Output ─────────────────────────────────────────────────────────────────────
-def print_report(player_name, zips_row, contract, control_rows, current_age, is_pitcher, war_y1, leverage=1.0, raw_war=None):
+def print_report(player_name, zips_row, contract, control_rows, current_age, is_pitcher, war_y1, leverage=1.0, raw_war=None, proj_sources=None):
     team = zips_row.get("Team", "?")
     pos = "P" if is_pitcher else zips_row.get("_position", zips_row.get("minpos", "?"))
     sep = "=" * 70
@@ -765,9 +896,16 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     print(f"\n{sep}")
     print(f"  {player_name.upper()} — {team} | {pos} | Age {current_age} | {_aging_phase_label(current_age)}")
     print(sep)
+    if proj_sources:
+        if len(proj_sources) == 1:
+            label, val = next(iter(proj_sources.items()))
+            print(f"  WAR      : {val:.1f} ({label})")
+        else:
+            parts = " | ".join(f"{k}: {v:.1f}" for k, v in proj_sources.items())
+            print(f"  WAR      : {sum(proj_sources.values()) / len(proj_sources):.1f} avg  [{parts}]")
     if leverage != 1.0 and raw_war is not None:
         role = next((k for k, v in RELIEF_ROLE_LEVERAGE.items() if v == leverage), "custom")
-        print(f"  ZiPS WAR : {raw_war:.1f} (raw ZiPS) × {leverage:.1f} leverage ({role}) = {war_y1:.1f} effective")
+        print(f"           : × {leverage:.1f} leverage ({role}) → {war_y1:.1f} effective")
     print(f"  Contract : {contract['status'].upper()}")
     if contract["aav"]:
         print(f"  AAV      : ${contract['aav']:.2f}M")
@@ -785,7 +923,7 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     print()
 
     arc = _aging_arc_summary(control_rows, current_age)
-    war_label = "ZiPS Projections (fWAR, leverage-adjusted)" if leverage != 1.0 else "ZiPS Projections (fWAR)"
+    war_label = "fWAR Projections (aging curve, leverage-adjusted)" if leverage != 1.0 else "fWAR Projections (aging curve)"
     print(f"  {war_label}")
     if arc:
         print(f"  {arc}")
@@ -836,12 +974,23 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     net  = tiers["net_tier"]
     cadj_str = f"+{cadj}" if cadj > 0 else str(cadj)
     spen_str = f"{spen}" if spen == 0 else f"{spen} (catastrophic surplus)"
+    dev_factor = tiers.get("dev_factor", 1.0)
+    tier_cap   = tiers.get("tier_cap")
+    dev_note = f" (×{dev_factor:.2f} dev discount)" if dev_factor < 1.0 else ""
     print(f"  ┌─ Trade Value Assessment ────────────────────────────────────┐")
     print(f"  │  Talent Tier    : {tt:>2}/10  {_TALENT_LABELS.get(tt, ''): <38}│")
+    if dev_note:
+        print(f"  │  Dev Discount   :        {dev_note.strip(): <42}│")
+    if tier_cap is not None and net == tier_cap:
+        cap_note = f"capped at {tier_cap} — unproven at {war_y1:.1f} wWAR (data-derived)"
+        print(f"  │  WAR Floor Cap  :        {cap_note: <42}│")
     print(f"  │  Contract       : {cadj_str:>3}    {_CONTRACT_LABELS.get(cadj, ''): <38}│")
     if spen < 0:
         print(f"  │  Surplus Pen.   : {spen:>3}    catastrophic total surplus (-${abs(tiers['total_surplus']):.0f}M) {'':15}│")
-    print(f"  │  Net Trade Tier : {net:>2}     {_NET_TIER_LABELS.get(net, ''): <38}│")
+    if net <= 3:
+        print(f"  │  Net Trade Tier :   —    {'salary relief — not a standard trade asset': <38}│")
+    else:
+        print(f"  │  Net Trade Tier : {net:>2}     {_NET_TIER_LABELS.get(net, ''): <38}│")
     if tiers["overpay_m"] > 1.0:
         overpay_note = f"${tiers['overpay_m']:.1f}M/yr above market — limits return"
         print(f"  │  Overpay        :        {overpay_note: <42}│")
@@ -853,17 +1002,23 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     print(f"      or no-trade clauses can significantly lower actual return.")
     print()
 
-    flags = ["fWAR throughout (bWAR not used)"]
+    flags = ["fWAR throughout (bWAR not used) — source: local OneDrive xlsx"]
     if is_pitcher and leverage == 1.0:
         flags.append("RP/SP: leverage not applied — add --relief-role {closer|setup|middle} for relievers")
     if is_pitcher:
         flags.append("Pitcher: note if fWAR vs bWAR gap > 1.0 WAR")
     if leverage != 1.0:
-        flags.append(f"Leverage factor {leverage:.1f}× applied to ZiPS WAR (gmLI proxy) — raw ZiPS: {raw_war:.1f} WAR")
+        flags.append(f"Leverage factor {leverage:.1f}× applied (gmLI proxy) — raw fWAR: {raw_war:.1f}")
     if contract["status"] == "unknown":
         flags.append("Contract status undetermined — salary estimates are rough")
-    if contract["options"]:
-        flags.append(f"Option year(s) present ({', '.join(contract['options'])}) — included assuming team exercises if surplus > buyout")
+    if contract["options"] and not contract.get("_years_override"):
+        flags.append(
+            f"VERIFY YEARS OF CONTROL — {', '.join(contract['options'])} detected. "
+            f"FG contract API frequently reports wrong year counts with option years. "
+            f"Confirm actual control length on Spotrac, then pass --years N to lock it in."
+        )
+    elif contract["options"]:
+        flags.append(f"Option year(s) present ({', '.join(contract['options'])}) — years locked via --years override")
     if contract["status"] == "pre-arb":
         flags.append("Pre-arb: value understated if player signs extension before FA — model only sees current window")
     if contract.get("payroll_note") and "defer" in contract["payroll_note"].lower():
@@ -877,6 +1032,241 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     for f in flags:
         print(f"  [!] {f}")
     print(f"\n{sep}\n")
+
+
+# ── Shared compute ─────────────────────────────────────────────────────────────
+def evaluate_player(player_name, is_pitcher=False, age_override=None, war_override=None,
+                    use_spotrac=False, fg_csv_path=None, relief_role=None,
+                    leverage_override=None, trade_type=None, run_comps=False,
+                    min_comps=3, quiet=False,
+                    gs=None, g=None, years_override=None, aav_override=None):
+    """
+    Compute trade value for a player. Returns a result dict.
+    On error the dict has 'error' set; all other keys may be absent.
+    Prints progress unless quiet=True.
+    """
+    def log(*a):
+        if not quiet:
+            print(*a)
+
+    log(f"\nLooking up {player_name!r}...")
+    fg_id, mlbam_id = lookup_player_ids(player_name)
+    log(f"  FanGraphs ID: {fg_id}" if fg_id else "  FanGraphs ID not found")
+
+    war_y1 = war_override
+    proj_sources = {}
+    _proj_rows = {}
+
+    if war_y1 is None:
+        for proj_type, label in (("thebatx", "THE BAT X"), ("zips", "ZiPS")):
+            log(f"  Fetching {label} projection...")
+            row = fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id)
+            if row:
+                w = float(row.get("WAR") or 0)
+                if w:
+                    proj_sources[label] = round(w, 1)
+                    _proj_rows[label] = row
+                    log(f"    {label}: {w:.1f} WAR")
+
+        if proj_sources:
+            war_y1 = round(sum(proj_sources.values()) / len(proj_sources), 2)
+            log(f"  Projection avg: {war_y1:.2f}")
+        else:
+            log(f"  No projections — falling back to {CURRENT_YEAR - 1} fWAR from local xlsx...")
+            war_y1, _ = fetch_war_from_xlsx(player_name, is_pitcher, CURRENT_YEAR - 1)
+            if war_y1 is None:
+                log(f"  Not found in {CURRENT_YEAR - 1}, trying {CURRENT_YEAR - 2}...")
+                war_y1, _ = fetch_war_from_xlsx(player_name, is_pitcher, CURRENT_YEAR - 2)
+            if war_y1 is None:
+                return {"player_name": player_name, "error": "WAR not found. Use --war to supply it."}
+            proj_sources["historical fWAR"] = round(war_y1, 1)
+            log(f"  Historical fWAR: {war_y1}")
+
+    _meta_row = _proj_rows.get("THE BAT X") or _proj_rows.get("ZiPS") or {}
+    zips_row = {"PlayerName": player_name, "Team": _meta_row.get("Team", "?"), "xMLBAMID": mlbam_id}
+
+    # Auto-fetch GS/G from MLB Stats API when --war given without --gs/--g
+    _gs, _g = gs, g
+    if war_override is not None and gs is None and g is None and mlbam_id:
+        try:
+            fetched = fetch_current_season_gs(int(mlbam_id), is_pitcher)
+            if fetched and int(fetched) > 0:
+                if is_pitcher:
+                    _gs = int(fetched)
+                    log(f"  Auto-fetched GS: {_gs} (MLB Stats API {CURRENT_YEAR})")
+                else:
+                    _g = int(fetched)
+                    log(f"  Auto-fetched G: {_g} (MLB Stats API {CURRENT_YEAR})")
+        except Exception as e:
+            log(f"  GS auto-fetch warning: {e}")
+
+    # Pace annualization: --war <partial> with GS/G (manual or auto-fetched)
+    if (_gs is not None or _g is not None) and war_override is not None:
+        if _gs is not None:
+            full = 30
+            annualized = round(war_y1 / _gs * full, 2)
+            log(f"  Pace: {war_y1:.1f} WAR / {_gs} GS × {full} full-season GS = {annualized:.1f} WAR")
+            war_y1 = annualized
+        else:
+            full = 65 if is_pitcher else 155
+            unit = "G (RP)" if is_pitcher else "G"
+            annualized = round(war_y1 / _g * full, 2)
+            log(f"  Pace: {war_y1:.1f} WAR / {_g} {unit} × {full} = {annualized:.1f} WAR")
+            war_y1 = annualized
+
+    current_age = age_override
+    mlb_info = {}
+    if mlbam_id:
+        try:
+            mlb_info = fetch_mlb_player_info(int(mlbam_id))
+        except Exception as e:
+            log(f"  MLB Stats API warning: {e}")
+
+    if current_age is None:
+        current_age = mlb_info.get("age")
+    if current_age is None:
+        return {"player_name": player_name, "error": "Age not determined. Use age_override."}
+    current_age = int(current_age)
+    zips_row.setdefault("_position", mlb_info.get("position", "?"))
+    log(f"  {zips_row.get('PlayerName', player_name)} | Age {current_age} | Yr1 WAR: {war_y1}")
+
+    # Contract
+    contract = None
+    if fg_csv_path:
+        log(f"Loading contract data from FanGraphs CSV: {fg_csv_path}")
+        contract = load_fg_csv(fg_csv_path, player_name, fg_id=fg_id)
+        if contract is None:
+            return {"player_name": player_name, "error": f"Not found in {fg_csv_path}"}
+        log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs CSV]")
+    else:
+        # Spotrac first — more accurate year counts for extensions/rentals.
+        # Fall back to FanGraphs when Spotrac returns None or "unknown" (recently signed deals).
+        log("Fetching contract data from Spotrac...")
+        contract = fetch_spotrac(player_name)
+        if contract and contract.get("status") != "unknown":
+            log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: Spotrac]")
+        else:
+            if contract:
+                log("  Spotrac returned unknown status — falling back to FanGraphs...")
+            if fg_id:
+                log("Fetching contract data from FanGraphs Roster Resource...")
+                fg_contract = fetch_fg_contract(fg_id)
+                if fg_contract:
+                    contract = fg_contract
+                    log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs]")
+            if contract is None or contract.get("status") == "unknown":
+                contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
+                log("  No contract data found — using pre-arb defaults")
+
+    # Contract overrides (correct stale API data)
+    if years_override is not None:
+        contract["_years_override"] = years_override
+        log(f"  Years override: {years_override} yr(s) of control")
+    if aav_override is not None:
+        contract["aav"] = aav_override
+        log(f"  AAV override: ${aav_override:.1f}M/yr")
+
+    raw_war = war_y1
+    if relief_role:
+        leverage = RELIEF_ROLE_LEVERAGE[relief_role]
+    elif leverage_override is not None:
+        leverage = leverage_override
+    else:
+        leverage = 1.0
+    effective_war = round(raw_war * leverage, 2)
+
+    n_years      = contract_n_years(contract)
+    war_projs    = project_wars(effective_war, current_age, n=n_years)
+    control_rows = build_control_years(contract, current_age, war_projs)
+    tiers        = calc_trade_tiers(effective_war, current_age, contract)
+
+    # Position + status for comps query
+    raw_pos   = mlb_info.get("position") or zips_row.get("_position") or ""
+    pos_group = "OF" if raw_pos.upper() in ("LF", "CF", "RF") else raw_pos.upper() or None
+    if pos_group not in ("SP", "RP", "C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"):
+        pos_group = ("RP" if relief_role else "SP") if is_pitcher else None
+
+    cs      = contract["status"]
+    arb_yr  = contract.get("arb_year_now")
+    if cs == "arb" and arb_yr:
+        comp_status = f"arb{arb_yr}"
+    elif cs == "ufa":
+        comp_status = "rental"
+    else:
+        comp_status = cs
+
+    salary = contract.get("aav") or None
+
+    comps, comp_expanded_mult = [], 1.0
+    if run_comps:
+        comps, comp_expanded_mult = find_comps(
+            effective_war, current_age, n_years, comp_status, pos_group,
+            salary=salary, trade_type=trade_type, exclude_player=player_name,
+            min_comps=min_comps,
+        )
+
+    return {
+        "player_name":        player_name,
+        "zips_row":           zips_row,
+        "contract":           contract,
+        "control_rows":       control_rows,
+        "current_age":        current_age,
+        "is_pitcher":         is_pitcher,
+        "war_y1":             effective_war,
+        "raw_war":            raw_war,
+        "proj_sources":       proj_sources,
+        "leverage":           leverage,
+        "tiers":              tiers,
+        "comps":              comps,
+        "comp_expanded_mult": comp_expanded_mult,
+        "comp_query": {
+            "war":      effective_war,
+            "age":      current_age,
+            "years":    n_years,
+            "status":   comp_status,
+            "position": pos_group,
+            "salary":   salary,
+        },
+        "error": None,
+    }
+
+
+def write_result_csv(results, path):
+    """Append player summary rows to a CSV. Creates file with header if it doesn't exist."""
+    fieldnames = [
+        "player", "age", "war", "years_control", "status", "salary_m",
+        "net_tier", "talent_tier", "contract_adj", "trade_value_m",
+        "avg_comp_tier", "comp_count", "comp_expanded",
+    ]
+    write_header = not Path(path).exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        if write_header:
+            w.writeheader()
+        written = 0
+        for r in results:
+            if r.get("error"):
+                continue
+            tiers = r["tiers"]
+            comps = r.get("comps", [])
+            avg_comp = round(sum(c[1]["return_tier"] for c in comps) / len(comps), 1) if comps else ""
+            w.writerow({
+                "player":        r["player_name"],
+                "age":           r["current_age"],
+                "war":           r["war_y1"],
+                "years_control": len(r["control_rows"]),
+                "status":        r["contract"]["status"],
+                "salary_m":      round(r["contract"].get("aav") or 0, 2),
+                "net_tier":      tiers["net_tier"],
+                "talent_tier":   tiers["talent_tier"],
+                "contract_adj":  tiers["contract_adj"],
+                "trade_value_m": tiers["total_surplus"],
+                "avg_comp_tier": avg_comp,
+                "comp_count":    len(comps),
+                "comp_expanded": r.get("comp_expanded_mult", 1.0) > 1.0,
+            })
+            written += 1
+    print(f"  Written {written} row(s) to {path}")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -910,135 +1300,74 @@ def main():
         "--leverage", type=float,
         help="Direct gmLI leverage multiplier (e.g. 1.8). Overridden by --relief-role.",
     )
+    ap.add_argument(
+        "--csv", metavar="PATH",
+        help="Append player summary to CSV (creates file with header if it doesn't exist)",
+    )
+    ap.add_argument(
+        "--gs", type=int, metavar="N",
+        help="Games started so far (SP). Annualizes --war to a 30-GS full season.",
+    )
+    ap.add_argument(
+        "--g", type=int, metavar="N",
+        help="Games played so far (RP or hitter). Annualizes --war to 65 G (RP) or 155 G (hitter).",
+    )
+    ap.add_argument(
+        "--years", type=int, metavar="N",
+        help="Override years of control remaining (corrects stale FanGraphs/Spotrac data).",
+    )
+    ap.add_argument(
+        "--aav", type=float, metavar="M",
+        help="Override annual average value in $M (corrects stale contract data).",
+    )
     args = ap.parse_args()
 
     player_name = " ".join(args.player)
-    is_pitcher  = args.pitcher
 
-    print(f"\nLooking up {player_name!r}...")
-    fg_id = lookup_fg_id(player_name)
-    if fg_id:
-        print(f"  FanGraphs ID: {fg_id}")
-    else:
-        print("  FanGraphs ID not found — falling back to name match")
+    result = evaluate_player(
+        player_name,
+        is_pitcher=args.pitcher,
+        age_override=args.age,
+        war_override=args.war,
+        use_spotrac=args.spotrac,
+        fg_csv_path=args.fg_csv,
+        relief_role=args.relief_role,
+        leverage_override=args.leverage,
+        trade_type=args.trade_type,
+        run_comps=args.comps,
+        min_comps=3,
+        gs=args.gs,
+        g=args.g,
+        years_override=args.years,
+        aav_override=args.aav,
+    )
 
-    print("Fetching ZiPS projections from FanGraphs...")
-    zips_row = fetch_zips(player_name, is_pitcher, fg_id=fg_id)
-    if zips_row is None:
-        print(f"\nERROR: No ZiPS projection found for {player_name!r}.")
-        print("  - Check spelling")
-        print("  - Add --pitcher if this is a pitcher")
-        print("  - Use --war to supply the projection manually")
+    if result.get("error"):
+        msg = result["error"]
+        print(f"\nERROR: {msg}")
+        if "ZiPS" in msg:
+            print("  - Check spelling")
+            print("  - Add --pitcher if this is a pitcher")
+            print("  - Use --war to supply the projection manually")
+        elif "WAR not found" in msg:
+            print(f"  Use --war to provide the projection manually.")
+        elif "Age not" in msg:
+            print("  Use --age to provide it.")
         sys.exit(1)
 
-    # Resolve WAR
-    war_y1 = args.war
-    if war_y1 is None:
-        for key in ("WAR", "war", "fWAR"):
-            if zips_row.get(key) is not None:
-                war_y1 = float(zips_row[key])
-                break
-        if war_y1 is None:
-            print(f"Could not find WAR in ZiPS response.")
-            print(f"Available keys: {list(zips_row.keys())}")
-            print("Use --war to provide the projection manually.")
-            sys.exit(1)
-
-    current_age = args.age
-
-    # Age and position from MLB Stats API via xMLBAMID in ZiPS row
-    mlb_info = {}
-    mlbam_id = zips_row.get("xMLBAMID")
-    if mlbam_id:
-        try:
-            mlb_info = fetch_mlb_player_info(int(mlbam_id))
-        except Exception as e:
-            print(f"  MLB Stats API warning: {e}")
-
-    if current_age is None:
-        current_age = mlb_info.get("age")
-    if current_age is None:
-        print("Could not determine age. Use --age to provide it.")
-        sys.exit(1)
-    current_age = int(current_age)
-
-    # Expose position for report (MLB Stats API beats ZiPS minpos field)
-    zips_row.setdefault("_position", mlb_info.get("position", "?"))
-
-    print(f"  {zips_row.get('PlayerName', player_name)} | Age {current_age} | Yr1 WAR: {war_y1}")
-
-    # ── Contract data source ─────────────────────────────────────────────────
-    contract = None
-
-    if args.fg_csv:
-        print(f"Loading contract data from FanGraphs CSV: {args.fg_csv}")
-        contract = load_fg_csv(args.fg_csv, player_name, fg_id=fg_id)
-        if contract is None:
-            print(f"  ERROR: {player_name!r} not found in {args.fg_csv}")
-            sys.exit(1)
-        print(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs CSV]")
-
-    elif args.spotrac:
-        print("Fetching contract data from Spotrac...")
-        contract = fetch_spotrac(player_name)
-        if contract is None:
-            print("  WARNING: Spotrac lookup failed. Using pre-arb defaults.")
-            contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
-        else:
-            print(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: Spotrac]")
-
-    else:
-        # Default: FanGraphs Roster Resource API (requires FG player ID)
-        if fg_id:
-            print("Fetching contract data from FanGraphs Roster Resource...")
-            contract = fetch_fg_contract(fg_id)
-            if contract:
-                print(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs]")
-        if contract is None:
-            print("Fetching contract data from Spotrac (FanGraphs ID not found or no contract data)...")
-            contract = fetch_spotrac(player_name)
-            if contract is None:
-                print("  WARNING: Spotrac lookup failed. Using pre-arb defaults.")
-                contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
-            else:
-                print(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: Spotrac]")
-
-    # Leverage adjustment for relievers (gmLI proxy)
-    raw_war = war_y1
-    if args.relief_role:
-        leverage = RELIEF_ROLE_LEVERAGE[args.relief_role]
-    elif args.leverage is not None:
-        leverage = args.leverage
-    else:
-        leverage = 1.0
-    effective_war = round(raw_war * leverage, 2)
-
-    n_years = contract_n_years(contract)
-    war_projections = project_wars(effective_war, current_age, n=n_years)
-    control_rows    = build_control_years(contract, current_age, war_projections)
-    print_report(player_name, zips_row, contract, control_rows, current_age, is_pitcher,
-                 effective_war, leverage=leverage, raw_war=raw_war)
+    print_report(result["player_name"], result["zips_row"], result["contract"],
+                 result["control_rows"], result["current_age"], result["is_pitcher"],
+                 result["war_y1"], leverage=result["leverage"], raw_war=result["raw_war"],
+                 proj_sources=result.get("proj_sources"))
 
     if args.comps:
-        raw_pos = mlb_info.get("position") or zips_row.get("_position") or ""
-        pos_group = "OF" if raw_pos.upper() in ("LF", "CF", "RF") else raw_pos.upper() or None
-        if pos_group not in ("SP", "RP", "C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"):
-            if is_pitcher:
-                pos_group = "RP" if args.relief_role else "SP"
-            else:
-                pos_group = None
-        cs = contract["status"]
-        arb_yr = contract.get("arb_year_now")
-        if cs == "arb" and arb_yr:
-            comp_status = f"arb{arb_yr}"
-        elif cs == "ufa":
-            comp_status = "rental"
-        else:
-            comp_status = cs  # pre-arb, signed, rental
-        salary = contract.get("aav") or None
-        comps = find_comps(effective_war, current_age, n_years, comp_status, pos_group,
-                           salary=salary, trade_type=args.trade_type, exclude_player=player_name)
-        print_comps(comps, effective_war, current_age, n_years, comp_status, pos_group, salary=salary)
+        q = result["comp_query"]
+        print_comps(result["comps"], q["war"], q["age"], q["years"],
+                    q["status"], q["position"], q["salary"],
+                    expanded_mult=result["comp_expanded_mult"])
+
+    if args.csv:
+        write_result_csv([result], args.csv)
 
 
 if __name__ == "__main__":

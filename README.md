@@ -1,6 +1,6 @@
 # MLB Trade Value Engine
 
-A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 282 verified historical trades (2016–2026).
+A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 368 verified historical trades (2016–2026).
 
 Input a player name. Get a surplus value breakdown, a Net Trade Tier (1–10), and the closest historical comps from the database.
 
@@ -33,7 +33,7 @@ Aging curve       = +0.25/yr pre-27, flat 27–30, −0.50/yr 31–33, −0.75/y
 
 **Aging curve:** The per-year WAR deltas (+0.25, 0.00, −0.50, −0.75) are standard approximations used broadly in baseball economics literature. They are applied uniformly and do not account for individual aging profiles — a known limitation for late bloomers and early decliners.
 
-Projections come from FanGraphs ZiPS. Salary and contract structure come from the FanGraphs Roster Resource API.
+Projections come from FanGraphs — THE BAT X and ZiPS are both fetched and averaged when available, falling back to the prior season's actual fWAR (local xlsx) if neither system has the player. Salary and contract structure come from the FanGraphs Roster Resource API.
 
 ### 2. wWAR — The Primary Matching Field
 
@@ -55,7 +55,7 @@ Three components combine into a single Net Trade Tier (1–10):
 
 ### 4. Historical Comps
 
-The comps engine searches 282 verified trades by wWAR, age, years of control, and contract status. When salary is provided, it also scores by WAR-salary ratio and end-age. The closest matches anchor the expected return range.
+The comps engine searches 368 verified trades by wWAR, age, years of control, and contract status. When salary is provided, it also scores by WAR-salary ratio and end-age. The closest matches anchor the expected return range.
 
 **Reliability by tier:** The database is concentrated in Tiers 1–6 (depth and mid-range moves, which represent the majority of real trades). High-tier comps (7–9) are sparse — 25 trades total. For elite players, the surplus value calculation carries more weight than the comp matches.
 
@@ -109,7 +109,7 @@ $ python comps.py --war 4.8 --age 25 --years 6 --status signed --position OF --s
 
 ## The Trade Database
 
-282 verified trades from 2016–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
+368 verified trades from 2015–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
 
 - **WAR history** — three prior seasons (Marcel-weighted into wWAR), availability grades, trend direction
 - **Contract context** — status, salary, AAV, years of control remaining
@@ -181,7 +181,7 @@ populate_trades.py       CLI to add new trades to trades.csv
 rebuild_trades_schema.py Canonical schema rebuild (run after WAR reference updates)
 calc_dollar_per_war_auto.py  Automated $/WAR calibration from FA market
 
-trades.csv               282-trade database (the core dataset)
+trades.csv               368-trade database (the core dataset)
 trade_value_engine.ipynb Narrative analysis notebook with case studies
 ```
 
@@ -206,5 +206,5 @@ trade_value_engine.ipynb Narrative analysis notebook with case studies
 - **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
 - **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
 - **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
-- **Comps database is 2016–2026.** Pre-2016 market conditions differ enough to exclude.
+- **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
 - **All fWAR** (not bWAR). Results are not directly comparable to analyses using Baseball Reference WAR.

@@ -16,6 +16,9 @@ Matching logic:
     Position          : hard filter when specified
     Salary            : optional; adds WAR-salary ratio penalty + end-age decline penalty
 
+Auto-expansion: if min_comps > 0 and fewer comps found than requested, windows
+expand up to 2× before giving up. Expanded windows are flagged in output.
+
 Scoring: each matched trade is scored by distance; closest comps shown first.
 """
 
@@ -33,12 +36,14 @@ YEARS_WINDOW  = 2
 
 DOLLAR_PER_WAR = 7.0  # current market rate; calibrated 2026-06-16 via calc_dollar_per_war_auto.py
 
-# 2022-2025 values calibrated via calc_dollar_per_war_auto.py (Spotrac FA class + FanGraphs contracts + fWAR xlsx, min-war 1.0)
-# Pre-2022 values approximate (FanGraphs Market Reports)
+# Key = trade year; value = median $/fWAR from the offseason FA class that preceded that season.
+# 2024-2026 calibrated via calc_dollar_per_war_auto.py --war-years 2 (2-yr WAR avg, tighter mean/median).
+# Pre-2024 approximate (FanGraphs Market Reports; 4-yr avg method).
+# 2026-07-06: switched to --war-years 2; 2024 7.8, 2025 7.5, 2026 8.5.
 DOLLAR_PER_WAR_BY_YEAR = {
     2015: 6.7, 2016: 7.3, 2017: 7.5, 2018: 8.0,
     2019: 8.4, 2020: 8.4, 2021: 8.0,
-    2022: 7.0, 2023: 7.2, 2024: 6.7, 2025: 6.9,
+    2022: 7.0, 2023: 7.2, 2024: 7.8, 2025: 7.5, 2026: 8.5,
 }
 
 
@@ -55,6 +60,9 @@ def _rate_for_year(year):
     years = sorted(DOLLAR_PER_WAR_BY_YEAR)
     return DOLLAR_PER_WAR_BY_YEAR[years[0] if year < years[0] else years[-1]]
 
+AVAIL_GRADE_SCORES = {"A+": 5, "A": 4, "B": 3, "C": 2, "D": 1, "F": 0}
+AVAIL_PENALTY_PER_STEP = 0.7
+
 CONTRACT_GROUPS = {
     "pre-arb": "team_control",
     "arb1":    "team_control",
@@ -63,6 +71,9 @@ CONTRACT_GROUPS = {
     "arb":     "team_control",
     "signed":  "signed",
     "rental":  "rental",
+    # opt-out: team declined a club option on a multi-year deal; groups with signed
+    # (multi-year deal heritage) not rental (arb players)
+    "opt-out": "signed",
 }
 
 RETURN_TIER_LABELS = {
@@ -105,6 +116,7 @@ def _contract_group(status):
 
 
 def score_comp(trade, war, age, years, status, position=None, salary=None,
+               avail_grade=None,
                war_window=WAR_WINDOW, age_window=AGE_WINDOW, years_window=YEARS_WINDOW,
                trade_type=None, exclude_player=None):
     """
@@ -143,6 +155,12 @@ def score_comp(trade, war, age, years, status, position=None, salary=None,
 
     score = (war_diff * 4) + (age_diff * 1.5) + (years_diff * 2) + contract_penalty
 
+    if avail_grade is not None:
+        comp_grade = trade.get("avail_grade", "")
+        if avail_grade in AVAIL_GRADE_SCORES and comp_grade in AVAIL_GRADE_SCORES:
+            grade_diff = abs(AVAIL_GRADE_SCORES[avail_grade] - AVAIL_GRADE_SCORES[comp_grade])
+            score += grade_diff * AVAIL_PENALTY_PER_STEP
+
     if salary is not None:
         market_value = max(war * DOLLAR_PER_WAR, 0.74)
         query_ratio  = salary / market_value
@@ -159,21 +177,45 @@ def score_comp(trade, war, age, years, status, position=None, salary=None,
 
 
 def find_comps(war, age, years, status, position=None, salary=None, top_n=5,
+               avail_grade=None,
                war_window=WAR_WINDOW, age_window=AGE_WINDOW, years_window=YEARS_WINDOW,
-               trade_type=None, exclude_player=None):
+               trade_type=None, exclude_player=None, min_comps=0):
+    """
+    Returns (comps, expanded_mult) tuple.
+    - comps: list of (score, trade_dict), sorted by score ascending, up to top_n.
+    - expanded_mult: 1.0 if default windows used; 1.5 or 2.0 if auto-expanded.
+    - min_comps: if > 0, auto-expand windows up to 2× until this many comps found.
+    """
     trades = load_trades(trade_type=trade_type)
-    scored = []
-    for t in trades:
-        s = score_comp(t, war, age, years, status, position, salary,
-                       war_window=war_window, age_window=age_window, years_window=years_window,
-                       exclude_player=exclude_player)
-        if s is not None:
-            scored.append((s, t))
-    scored.sort(key=lambda x: x[0])
-    return scored[:top_n]
+
+    steps = [(1.0, war_window, age_window, years_window)]
+    if min_comps > 0:
+        steps += [
+            (1.5, round(war_window * 1.5, 1), int(age_window * 1.5 + 0.5), int(years_window * 1.5 + 0.5)),
+            (2.0, round(war_window * 2.0, 1), int(age_window * 2.0), int(years_window * 2.0)),
+        ]
+
+    result, used_mult = [], 1.0
+    for mult, ww, aw, yw in steps:
+        scored = []
+        for t in trades:
+            s = score_comp(t, war, age, years, status, position, salary,
+                           avail_grade=avail_grade,
+                           war_window=ww, age_window=aw, years_window=yw,
+                           exclude_player=exclude_player)
+            if s is not None:
+                scored.append((s, t))
+        scored.sort(key=lambda x: x[0])
+        result = scored[:top_n]
+        used_mult = mult
+        if len(result) >= min_comps:
+            break
+
+    return result, used_mult
 
 
-def print_comps(comps, war, age, years, status, position=None, salary=None):
+def print_comps(comps, war, age, years, status, position=None, salary=None,
+                avail_grade=None, expanded_mult=1.0):
     sep = "=" * 70
     print(f"\n{sep}")
     print(f"  TRADE COMPARABLES")
@@ -181,10 +223,17 @@ def print_comps(comps, war, age, years, status, position=None, salary=None):
     if salary is not None:
         query_pct = salary / max(war * DOLLAR_PER_WAR, 0.74) * 100
         salary_str = f" | ${salary:.1f}M ({query_pct:.0f}% of market)"
-    print(f"  Query: {war:.1f} WAR | Age {age} | {years} yr(s) control | {status.upper()}"
+    avail_str = f" | Avail {avail_grade}" if avail_grade else ""
+    end_age_str = f" | End age {age + years}" if years > 0 else ""
+    print(f"  Query: {war:.1f} WAR | Age {age} | {years} yr(s) control{end_age_str} | {status.upper()}"
           + (f" | {position.upper()}" if position else "")
+          + avail_str
           + salary_str)
-    print(f"  Windows: WAR ±{WAR_WINDOW} | Age ±{AGE_WINDOW} | Control ±{YEARS_WINDOW}")
+    ww = round(WAR_WINDOW * expanded_mult, 1)
+    aw = int(AGE_WINDOW * expanded_mult + 0.5)
+    yw = int(YEARS_WINDOW * expanded_mult + 0.5)
+    expand_note = "  [auto-expanded — few comps at default windows]" if expanded_mult > 1.0 else ""
+    print(f"  Windows: WAR ±{ww} | Age ±{aw} | Control ±{yw}{expand_note}")
     if position:
         print(f"  Position filter: {position.upper()} (hard exclude)")
     print(sep)
@@ -208,8 +257,14 @@ def print_comps(comps, war, age, years, status, position=None, salary=None):
         yr1_str = f" (yr1: {t['war_yr1']:.1f})" if t.get("war_yr1") else ""
         trend   = t.get("trend_label", "")
         trend_str = f" | {trend}" if trend else ""
+        comp_avail = t.get("avail_grade", "")
+        avail_disp = f" | Avail {comp_avail}" if comp_avail else ""
+        ctrl_yrs = t["years_control_remaining"]
+        end_age = t["age_at_trade"] + ctrl_yrs
+        end_age_disp = f" | End {end_age}" if ctrl_yrs > 0 else ""
         print(f"       Profile: wWAR {t['wWAR']:.1f}{yr1_str}{trend_str} | Age {t['age_at_trade']} | "
-              f"{t['years_control_remaining']} yr ctrl | {t['contract_status'].upper()} | ${t['salary_m']:.1f}M")
+              f"{ctrl_yrs} yr ctrl{end_age_disp} | {t['contract_status'].upper()} | ${t['salary_m']:.1f}M"
+              + avail_disp)
         if salary is not None:
             comp_year   = _trade_year(t["trade_date"])
             comp_rate   = _rate_for_year(comp_year)
@@ -230,11 +285,25 @@ def print_comps(comps, war, age, years, status, position=None, salary=None):
             print(f"       [!] Return details partially unverified — verify before citing")
     print(f"  {'─'*66}")
 
-    # Return range summary
     low_tier  = min(tiers)
     high_tier = max(tiers)
     print(f"\n  Return range based on comps: {low_tier}/10 – {high_tier}/10")
     print(f"  ({RETURN_TIER_LABELS.get(low_tier,'')} to {RETURN_TIER_LABELS.get(high_tier,'')})")
+
+    # Pitcher variance note
+    if position and position.upper() in ("SP", "RP"):
+        role = "SP" if position.upper() == "SP" else "RP"
+        extra = (" Includes Tommy John and role-change-to-bullpen risk." if role == "SP" else
+                 " Role changes and declining leverage can compress WAR quickly.")
+        print(f"\n  [Pitcher pool] WAR variance is elevated vs. hitter comps.{extra}"
+              f"\n  Treat this return range as ~±0.5 tiers wider than the numbers suggest.")
+    elif not position:
+        pitcher_count = sum(1 for _, t in comps if t.get("is_pitcher"))
+        hitter_count  = len(comps) - pitcher_count
+        if pitcher_count > 0 and hitter_count > 0:
+            print(f"\n  [!] Mixed pool: {pitcher_count} pitcher / {hitter_count} position player comp(s)."
+                  f"\n  Add --position to tighten the pool — pitcher and hitter WAR are not directly comparable.")
+
     print(f"\n{sep}\n")
 
 
@@ -244,7 +313,7 @@ def main():
     ap.add_argument("--age",      type=int,   required=True, help="Player age at time of trade")
     ap.add_argument("--years",    type=int,   required=True, help="Years of control remaining")
     ap.add_argument("--status",   required=True,
-                    choices=["pre-arb","arb1","arb2","arb3","arb","signed","rental"],
+                    choices=["pre-arb","arb1","arb2","arb3","arb","signed","rental","opt-out"],
                     help="Contract status")
     ap.add_argument("--position", help="Position group: SP RP C 1B 2B 3B SS OF DH IF UTIL")
     ap.add_argument("--salary",   type=float, help="Player salary $M — enables salary-ratio scoring and year-adjusted comp display")
@@ -257,14 +326,20 @@ def main():
                     help=f"Years control window (default: {YEARS_WINDOW})")
     ap.add_argument("--trade-type",   choices=["deadline", "offseason"],
                     help="Filter comps to deadline or offseason trades only")
+    ap.add_argument("--min-comps", type=int, default=0,
+                    help="Auto-expand windows to hit this many comps (0 = no expansion)")
+    ap.add_argument("--avail-grade", choices=["A+", "A", "B", "C", "D", "F"],
+                    help="Player availability grade — penalizes comps with very different health profiles")
     args = ap.parse_args()
 
-    comps = find_comps(
+    comps, expanded_mult = find_comps(
         args.war, args.age, args.years, args.status, args.position, args.salary, args.top,
+        avail_grade=args.avail_grade,
         war_window=args.war_window, age_window=args.age_window, years_window=args.years_window,
-        trade_type=args.trade_type,
+        trade_type=args.trade_type, min_comps=args.min_comps,
     )
-    print_comps(comps, args.war, args.age, args.years, args.status, args.position, args.salary)
+    print_comps(comps, args.war, args.age, args.years, args.status, args.position, args.salary,
+                avail_grade=args.avail_grade, expanded_mult=expanded_mult)
 
 
 if __name__ == "__main__":

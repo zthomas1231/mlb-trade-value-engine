@@ -26,6 +26,7 @@ fill_gm_input.json
 # Internal workflow scripts
 fill_trades_workflow.js
 fill_gm_workflow.js
+fill_grades_workflow.js
 
 # Internal merge/build scripts
 merge_results.py
@@ -38,6 +39,32 @@ trades_67only_backup.csv
 new.csv
 GitHub_Portfolio_Guide.docx
 ~$*.docx
+
+# Word documents (internal research, not part of public repo)
+*.docx
+team_report_cards/
+
+# One-off data pipeline scripts (internal tooling)
+fill_*.py
+fix_*.py
+rebuild_*.py
+build_*.py
+fetch_*.py
+check_*.py
+compute_*.py
+calc_dollar_per_war.py
+auto_war_reference.py
+war_grades.py
+draft_assist.py
+make_deadline_doc.py
+make_guide.py
+
+# Internal research files
+bullpen_research_2026.md
+players_deadline_2026.txt
+grade_pending.json
+audit_compact.json
+out.txt
 
 # OS junk
 .DS_Store
