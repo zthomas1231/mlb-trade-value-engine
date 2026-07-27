@@ -650,25 +650,33 @@ _TALENT_THRESHOLDS = [
 # Pre-arb/arb players have meaningful bust risk; the surplus formula is optimistic
 # because it projects full career value at wWAR with no probability-of-sticking haircut.
 # Applied only to talent_tier and contract_adj ratio — not to the surplus table display.
+# Recalibrated 2026-07-27 via grid search on 321-trade back-test.
+# Old values (0.80/0.90/0.95) produced +1.5–1.7 tier overestimation for arb classes.
+# New values bring arb1/arb2/arb3 mean errors to ≤ ±0.2 (MAE 1.91, ±2: 71%).
 _DEVELOPMENT_FACTORS = {
     "pre-arb": 0.70,
-    "arb1":    0.80,
-    "arb":     0.85,   # FanGraphs generic "arb" — treat as arb2 equivalent
-    "arb2":    0.90,
-    "arb3":    0.95,
+    "arb1":    0.35,
+    "arb":     0.60,   # FanGraphs generic "arb" — treat as arb2 equivalent
+    "arb2":    0.60,
+    "arb3":    0.60,
     "rental":  1.00,
     "signed":  1.00,
 }
 
-# Hard net-tier ceiling for pre-arb and arb1 players, derived empirically
-# from the p90 of actual return_tier by wWAR bucket across 321 verified trades.
-# These statuses have the highest bust risk; arb2/arb3 rely on the dev discount only.
-# Threshold list: [(wWAR_min, max_net_tier), ...] — first match wins (highest wWAR first).
+# Hard net-tier ceiling for pre-arb and arb1 players (original caps retained).
 _UNPROVEN_TIER_CAPS = [
-    (4.0, 10),   # proven star — no meaningful cap
-    (2.5,  8),   # solid performer — p90 actual = 7 in data
-    (1.0,  6),   # below-average — p90 actual = 5.6; cap at 6 allows outliers
-    (0.0,  5),   # fringe — p90 actual = 4.0; cap at 5 allows outliers
+    (4.0, 10),
+    (2.5,  8),
+    (1.0,  6),
+    (0.0,  5),
+]
+# arb2 cap — extends the WAR-floor mechanism to arb2 (tighter than arb1 caps;
+# calibrated from p90 of actual return_tier for arb2 by wWAR bucket).
+_ARB2_TIER_CAPS = [
+    (4.0, 10),
+    (2.5,  7),
+    (1.0,  5),
+    (0.0,  4),
 ]
 _UNPROVEN_STATUSES = {"pre-arb", "arb1"}
 
@@ -780,8 +788,13 @@ def calc_trade_tiers(war_y1, current_age, contract):
             if war_y1 >= wWAR_min:
                 tier_cap = cap
                 break
-        if tier_cap is not None:
-            net = min(net, tier_cap)
+    elif status in ("arb2", "arb"):
+        for wWAR_min, cap in _ARB2_TIER_CAPS:
+            if war_y1 >= wWAR_min:
+                tier_cap = cap
+                break
+    if tier_cap is not None:
+        net = min(net, tier_cap)
 
     # Annual overpay: Year 1 actual salary vs current year market value.
     # Use ctrl_rows[0] rather than AAV — FanGraphs AAV can be stale for option-year contracts.

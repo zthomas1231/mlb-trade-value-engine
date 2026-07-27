@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from player_value import (project_wars, _TALENT_THRESHOLDS, _DEVELOPMENT_FACTORS,
-                          _UNPROVEN_TIER_CAPS, _UNPROVEN_STATUSES,
+                          _UNPROVEN_TIER_CAPS, _ARB2_TIER_CAPS, _UNPROVEN_STATUSES,
                           DISCOUNT_RATE, CONTROL_DISCOUNT)
 from comps import DOLLAR_PER_WAR_BY_YEAR
 
@@ -88,6 +88,11 @@ def run_model(row):
             if wWAR >= wWAR_min:
                 net = min(net, cap)
                 break
+    elif status in ("arb2", "arb"):
+        for wWAR_min, cap in _ARB2_TIER_CAPS:
+            if wWAR >= wWAR_min:
+                net = min(net, cap)
+                break
 
     return {
         "tv": tv, "talent_tier": tt, "cadj": cadj,
@@ -96,7 +101,8 @@ def run_model(row):
 
 
 def main():
-    df = pd.read_csv("trades.csv")
+    df = pd.read_csv("trades.csv", encoding="utf-8-sig")
+    df = df.rename(columns={df.columns[0]: "trade_id"})
 
     required = ["wWAR", "age_at_trade", "years_control_remaining", "return_tier"]
     df = df.dropna(subset=required)
