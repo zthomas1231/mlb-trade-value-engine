@@ -59,8 +59,14 @@ FIELDNAMES = [
 def next_trade_id():
     if not TRADES_CSV.exists():
         return "T001"
-    with open(TRADES_CSV, newline="", encoding="utf-8") as f:
-        ids = [r["trade_id"] for r in csv.DictReader(f) if r.get("trade_id", "").startswith("T")]
+    with open(TRADES_CSV, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        first_col = reader.fieldnames[0] if reader.fieldnames else "trade_id"
+        ids = []
+        for r in reader:
+            val = r.get("trade_id") or r.get(first_col, "")
+            if val.startswith("T"):
+                ids.append(val)
     nums = [int(tid[1:]) for tid in ids if tid[1:].isdigit()]
     return f"T{max(nums) + 1:03d}" if nums else "T001"
 
