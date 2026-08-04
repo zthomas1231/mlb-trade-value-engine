@@ -74,6 +74,31 @@ def arb_salary(market_value_m, arb_year):
     return market_value_m * ARB_RATES.get(arb_year, 0.40)
 
 
+# ── Manual contract overrides (correct stale/incomplete API data) ──────────────
+# Keyed by lowercase player name. Use when all three API sources return wrong
+# year counts (bref salary page only shows current year for multi-year deals).
+_CONTRACT_OVERRIDES = {
+    "xander bogaerts": {
+        "status": "signed",
+        "aav": 25.45,
+        "yearly": [
+            {"year": 2026, "status": "signed", "salary_m": 25.0},
+            {"year": 2027, "status": "signed", "salary_m": 27.5},
+            {"year": 2028, "status": "signed", "salary_m": 27.5},
+            {"year": 2029, "status": "signed", "salary_m": 27.5},
+            {"year": 2030, "status": "signed", "salary_m": 27.5},
+            {"year": 2031, "status": "signed", "salary_m": 27.5},
+            {"year": 2032, "status": "signed", "salary_m": 27.5},
+            {"year": 2033, "status": "signed", "salary_m": 27.5},  # player option
+        ],
+        "salaries": [25.0, 27.5, 27.5, 27.5, 27.5, 27.5, 27.5, 27.5],
+        "options": ["player option (2033, $27.5M)"],
+        "service_time": 12.0,
+        "source": "manual",
+    },
+}
+
+
 # ── Player ID lookup ───────────────────────────────────────────────────────────
 def lookup_player_ids(player_name):
     """Returns (fg_id, mlbam_id). Either may be None."""
@@ -1099,16 +1124,33 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     print()
 
     print("  Surplus Value Breakdown")
+    print("  Is the team getting a deal or overpaying, year by year?\n")
+    print("  Each row compares what this player is projected to produce (Market = WAR × $7M,")
+    print("  the open-market rate for that level of production) against what the team actually")
+    print("  owes (Salary). The gap is the Surplus. Positive means the team is paying below")
+    print("  market value. Negative (◄) means the salary exceeds what the player produces.\n")
+    print("  Disc. adjusts each year's surplus for time — future production is worth less than")
+    print("  production today, discounted at 5% per year.\n")
+    print("  When WAR reaches 0.0, the player is projected at replacement level: no market")
+    print("  value, but salary still owed. Negative surplus years can improve if the player")
+    print("  outperforms his aging projection, or if rising $/WAR over time makes old contracts")
+    print("  look cheaper. For severely negative contracts, a salary relief trade — where the")
+    print("  team accepts a lighter return in exchange for another team absorbing the obligation")
+    print("  — is often the most realistic path.")
     print(f"  ($/WAR = ${DOLLARS_PER_WAR}M · discount = {int(DISCOUNT_RATE*100)}%/yr · controllability = {CONTROL_DISCOUNT}×)")
     hdr = f"  {'Year':<6} {'Age':<5} {'WAR':<5} {'Market':>9} {'Salary':>10} {'Type':<11} {'Surplus':>8} {'Disc.':>8}"
     print(hdr)
     print(f"  {'─'*70}")
     fa_divider_printed = False
+    floor_divider_printed = False
     for r in control_rows:
         is_fa = r["salary_type"] in ("UFA", "FA (est.)")
         if is_fa and not fa_divider_printed:
             print(f"  {'─'*21}  free agent after {r['year'] - 1}  {'─'*21}")
             fa_divider_printed = True
+        if r["war"] == 0.0 and not floor_divider_printed and not is_fa:
+            print(f"  {'─'*14}  WAR at floor — no projected value, salary continues  {'─'*14}")
+            floor_divider_printed = True
         flag = " ◄" if r["surplus"] < 0 else ""
         print(
             f"  {r['year']:<6} {r['age']:<5} {r['war']:<5.1f}"
@@ -1189,13 +1231,13 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
         flags.append(f"Leverage factor {leverage:.1f}× applied (gmLI proxy) — raw fWAR: {raw_war:.1f}")
     if contract["status"] == "unknown":
         flags.append("Contract status undetermined — salary estimates are rough")
-    if contract["options"] and not contract.get("_years_override"):
+    if contract["options"] and not contract.get("_years_override") and contract.get("source") != "manual":
         flags.append(
             f"VERIFY YEARS OF CONTROL — {', '.join(contract['options'])} detected. "
             f"FG contract API frequently reports wrong year counts with option years. "
             f"Confirm actual control length on Spotrac, then pass --years N to lock it in."
         )
-    elif contract["options"]:
+    elif contract["options"] and contract.get("source") != "manual":
         flags.append(f"Option year(s) present ({', '.join(contract['options'])}) — years locked via --years override")
     if contract["status"] == "pre-arb":
         flags.append("Pre-arb: value understated if player signs extension before FA — model only sees current window")
@@ -1335,6 +1377,9 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
     elif aav_override is not None and years_override is not None:
         contract = {"status": "signed", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": aav_override}
         log(f"  Using manual contract overrides — skipping API fetch")
+    elif player_name.strip().lower() in _CONTRACT_OVERRIDES:
+        contract = _CONTRACT_OVERRIDES[player_name.strip().lower()]
+        log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M | {len(contract['yearly'])} yr(s) remaining  [source: manual override]")
     else:
         # Spotrac first — more accurate year counts for extensions/rentals.
         # Fall back to FanGraphs when Spotrac returns None or "unknown" (recently signed deals).
