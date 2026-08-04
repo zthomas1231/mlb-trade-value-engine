@@ -1,24 +1,21 @@
 # MLB Trade Value Engine
 
-A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 368 verified historical trades (2016–2026).
-
-Input a player name. Get a surplus value breakdown, a Net Trade Tier (1–10), and the closest historical comps from the database.
+A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and over 400 verified historical trades (2016–2026).
 
 ---
 
 ## Motivation
 
-MLB trades are priced by two things: how much production a player generates above their salary cost, and how many years a team controls that surplus. The market has a consistent internal logic — but it is rarely made explicit.
+Juan Soto got traded twice in thirteen months for two completely different returns. Same player, same production, same team control window shrinking by exactly one year. If you can explain why those two packages looked so different, you understand what this project is trying to measure.
 
-This project makes it explicit. The model translates a player's WAR projection, salary, contract length, and age into a surplus value figure, then finds the closest matching trades in a hand-built database to anchor the expected return range.
-
+A few things distort how a trade gets judged in the moment. Rentals get overvalued in the reaction and undervalued in hindsight: the player already in the majors gets the headlines, while the prospect coming back can end up outproducing him over a full control window, the way Soto's two trades priced so differently once his control window shrank. Sell-high moves run the same distortion in reverse, called premature right up until the player declines and the return looks fair all along. Retrospectives also cherry-pick their examples, since the prospects who become the story are the ones who actually developed, while most traded prospects never do. And not every team is optimizing for pure value in the first place, a contender in a tight window will take a lighter return because the player fills a need right now, not because the deal was mispriced.
 ---
 
 ## How It Works
 
-### 1. Surplus Value
+Trade value comes down to one question: how much production is a team getting above what they're paying for it, and for how long? That gap — surplus value — is what drives prospect returns. The model makes it explicit.
 
-**Surplus = (Projected WAR × $/WAR) − Salary**, summed across all control years with a 5% annual discount and a 0.875× controllability factor.
+**Surplus = (Projected WAR × $/WAR) − Salary**, summed across all remaining control years with a 5% annual discount and a 0.875× controllability factor.
 
 ```
 $/WAR             = $7.0M  (calibrated from 2022–2025 free agent contracts)
@@ -27,23 +24,15 @@ Control discount  = 0.875×
 Aging curve       = +0.25/yr pre-27, flat 27–30, −0.50/yr 31–33, −0.75/yr 34+
 ```
 
-**$/WAR calibration:** Derived from signed free agent contracts matched to 3-year trailing WAR averages (2022–2025 FA classes). See `calc_dollar_per_war_auto.py`.
+Surplus comes from different places, and the source matters. A pre-arb player earning $750K on a 4-WAR season generates surplus almost entirely from being cheap. A signed player at $12M producing 5 WAR generates surplus from performance outpacing the contract. Both can arrive at the same dollar figure — but how they got there shapes how a trade market prices them.
 
-**Controllability discount (0.875×):** A player under team control cannot opt out into free agency, which reduces the market's effective willingness to pay relative to a freely available FA. The 0.875 factor (a 12.5% haircut) approximates this discount, consistent with several published analyses of team control premium.
+$/WAR is calibrated from signed free agent contracts matched to 3-year trailing WAR averages. The controllability discount (0.875×) reflects a real market dynamic: a player under team control can't opt out, so the acquiring team accepts a slight discount relative to a freely available FA. The aging curve (+0.25 pre-27, flat 27–30, −0.50 through 33, −0.75 after) is applied uniformly — it doesn't account for individual profiles, which is a known limitation. Projections use Baseball Reference bWAR (annualized from YTD pace) as the primary source, falling back to local FanGraphs projection files (THE BAT X / ZiPS) when live data is unavailable.
 
-**Aging curve:** The per-year WAR deltas (+0.25, 0.00, −0.50, −0.75) are standard approximations used broadly in baseball economics literature. They are applied uniformly and do not account for individual aging profiles — a known limitation for late bloomers and early decliners.
+**A note on WAR sources.** Current-year player WAR comes from Baseball Reference bWAR; the historical comps database (trades.csv) uses FanGraphs fWAR throughout. These are not the same number. bWAR uses RA9 (actual runs allowed, adjusted for team defense) for pitchers; fWAR uses FIP (strikeouts, walks, home runs only), which strips out contact quality and defense. Soft-contact, ground ball pitchers (Valdez, Webb) show higher bWAR than fWAR — actual run prevention exceeds what FIP predicts. High-strikeout pitchers (Cole, Skenes) often show higher fWAR. The gap is typically 0.5–1.5 WAR for pitchers, smaller (±0.3–0.5) for position players where the main difference is defensive metric (UZR vs. DRS). In practice, the tier output (1–10) is broad enough that this gap rarely shifts a result by more than one tier — but for borderline pitcher evaluations, treat the model tier as a range, not a point estimate. The output flags when bWAR is in use and warns when the pitcher gap may be material.
 
-Projections come from FanGraphs — THE BAT X and ZiPS are both fetched and averaged when available, falling back to the prior season's actual fWAR (local xlsx) if neither system has the player. Salary and contract structure come from the FanGraphs Roster Resource API.
+**wWAR** — the primary matching field for historical comps — is a recency-weighted average of the three seasons before the trade (Marcel-style 5/4/3 weights, most recent season heaviest). This mirrors how front offices actually evaluate trade targets: they care about who a player is now, not a career average. The 2020 COVID season slot is skipped entirely and weights are redistributed.
 
-### 2. wWAR — The Primary Matching Field
-
-Historical trade comps are anchored to **wWAR**: a recency-weighted average of the three seasons before the trade, using Marcel-style weights (5/4/3 — most recent season counts most). The 2020 COVID 60-game season slot is skipped and weights are redistributed.
-
-This matches how front offices actually evaluate trade targets: recent performance weighted heavily, with a full three-year window to smooth single-season variance.
-
-### 3. Net Trade Tier
-
-Three components combine into a single Net Trade Tier (1–10):
+The model converts surplus into a **Net Trade Tier** (1–10) by combining three components:
 
 | Component | Range | Description |
 |---|---|---|
@@ -51,71 +40,159 @@ Three components combine into a single Net Trade Tier (1–10):
 | Contract Adj | −3 to +3 | How team-friendly or burdensome the salary is |
 | Severity Penalty | 0 to −3 | Fires on deeply negative surplus (albatross contracts) |
 
-**Calibration note:** Tier thresholds are calibrated against the surplus values of the verified trades in the database. The highest return grade in the database is Tier 9 (Yelich to Milwaukee, 2018). The model can project Tier 10 for current players based on surplus value — this represents a theoretical ceiling not yet observed in the historical dataset.
+Tier thresholds are calibrated against the surplus values of the 368 verified trades in the database. Tier 9 represents the highest return grade in the historical data. The Soto trade (Abrams, Gore, Hassell, Wood, Susana) produced the highest return and would represent a Tier 10 in isolation, but drops to Tier 9 to account for Bell's inclusion in the package sent back the other way.
 
-### 4. Historical Comps
-
-The comps engine searches 368 verified trades by wWAR, age, years of control, and contract status. When salary is provided, it also scores by WAR-salary ratio and end-age. The closest matches anchor the expected return range.
-
-**Reliability by tier:** The database is concentrated in Tiers 1–6 (depth and mid-range moves, which represent the majority of real trades). High-tier comps (7–9) are sparse — 25 trades total. For elite players, the surplus value calculation carries more weight than the comp matches.
+Historical comps search the database by wWAR, age, years of control, and contract status. When salary is provided, comp scoring also factors in WAR-salary ratio and end-age. The closest matches anchor the expected return range and give real-world grounding to what the surplus model projects. The database is concentrated in Tiers 1–6 — depth and mid-range moves make up the majority of real trades. For elite players (Tier 7+), the surplus calculation carries more weight than the comp matches.
 
 ---
 
 ## Sample Output
 
+Three contrasting examples — arb pitcher, arb position player, and an overpaid veteran — showing the model across different player types and contract situations.
+
+**1. Arb SP, one year of control (Logan Gilbert, SEA)**
+
 ```
-$ python player_value.py "Corbin Carroll"
+$ python player_value.py "Logan Gilbert" --pitcher
 
 ======================================================================
-  CORBIN CARROLL — ARI | RF | Age 25 | pre-peak (improving)
+  LOGAN GILBERT — ? | P | Age 29 | peak (flat)
 ======================================================================
-  Contract : SIGNED
-  AAV      : $13.88M
-  Context  : Signed through 2031 — VERY team-friendly (41% of market). 6 yr(s) of control.
+  WAR      : 4.2 (2026 bWAR (pace))
+  Contract : ARB
+  AAV      : $10.93M
+  Service  : 4.144 years
+
+  Context  : Arb 3 of 3 — salary at 80% of $29.2M market value.
+             No extension signed — trade value declines at each arb step.
 
   Surplus Value Breakdown
-  Year   Age   WAR    Market      Salary              Surplus    Disc.
+  ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
+  Year   Age   WAR      Market     Salary Type         Surplus    Disc.
   ──────────────────────────────────────────────────────────────────────
-  2026   25    4.8   $ 33.9M  $ 10.0M  fangraphs    $ 23.9M  $ 23.9M
-  2027   26    5.1   $ 35.7M  $ 12.0M  fangraphs    $ 23.7M  $ 22.6M
-  2028   27    5.1   $ 35.7M  $ 14.0M  fangraphs    $ 21.7M  $ 19.7M
-  2029   28    5.1   $ 35.7M  $ 28.0M  fangraphs    $  7.7M  $  6.7M
-  2030   29    5.1   $ 35.7M  $ 28.0M  fangraphs    $  7.7M  $  6.3M
-  2031   30    5.1   $ 35.7M  $ 28.0M  Club         $  7.7M  $  6.0M
+  2026   29    4.2   $   29.2M $ 10.927M ARB 3       $  18.3M $  18.3M
+  ─────────────────────  free agent after 2026  ─────────────────────
+  2027   30    4.2   $   29.2M $ 29.190M FA (est.)   $   0.0M $   0.0M
+  2028   31    3.7   $   25.7M $ 25.690M UFA         $   0.0M $   0.0M
   ──────────────────────────────────────────────────────────────────────
-  Total Discounted Surplus  : $85.2M
-  Trade Value (×0.875)      : $74.5M
+  Total Discounted Surplus  : $18.3M
+  Trade Value (×0.875)      : $16.0M
+  Confidence Range          : $9.9M – $22.1M  (±1 WAR on Yr 1)
 
-  ┌─ Trade Value Assessment ───────────────────────────────────┐
-  │  Talent Tier    : 10/10  franchise player                   │
-  │  Contract       :  +1    below market                       │
-  │  Net Trade Tier : 10     generational — franchise-defining  │
-  └────────────────────────────────────────────────────────────┘
+  ┌─ Trade Value Assessment ────────────────────────────────────┐
+  │  Talent Tier    :  7/10  above-average starter                 │
+  │  Dev Discount   :        (×0.60 dev discount applied)          │
+  │  Contract       :  -1    slightly overpaid                     │
+  │  Net Trade Tier :  6     solid return — quality top-100 package│
+  └─────────────────────────────────────────────────────────────┘
 ```
 
+**2. Arb 3B, two years of control (Isaac Paredes, CHC)**
+
 ```
-$ python comps.py --war 4.8 --age 25 --years 6 --status signed --position OF --salary 13.88
+$ python player_value.py "Isaac Paredes"
 
-  1 comp found  |  avg return tier: 9.0/10 (elite package)
+======================================================================
+  ISAAC PAREDES — ? | 3B | Age 27 | peak (flat)
+======================================================================
+  WAR      : 3.9 (2026 bWAR (pace))
+  Contract : ARB
+  AAV      : $9.35M
+  Service  : 4.160 years
+  Options  : club option
 
-  #1  Christian Yelich  (MIA → MIL, Jan 2018)
-       Profile: wWAR 4.1 | Age 26 | 4yr ctrl | SIGNED | $7.0M
-       Return tier: 9/10
-       Key pieces: Lewis Brinson, Isan Diaz, Monte Harrison, Jordan Yamamoto
-       Yelich won NL MVP in year one with Milwaukee.
+  Context  : Arb 3 of 3 — salary at 80% of $27.2M market value.
+             No extension signed — trade value declines at each arb step.
+
+  Surplus Value Breakdown
+  ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
+  Year   Age   WAR      Market     Salary Type         Surplus    Disc.
+  ──────────────────────────────────────────────────────────────────────
+  2026   27    3.9   $   27.2M $  9.350M ARB 3       $  17.8M $  17.8M
+  2027   28    3.9   $   27.2M $ 13.350M ARB 4       $  13.8M $  13.2M
+  ─────────────────────  free agent after 2027  ─────────────────────
+  2028   29    3.9   $   27.2M $ 27.160M UFA         $   0.0M $   0.0M
+  ──────────────────────────────────────────────────────────────────────
+  Total Discounted Surplus  : $31.0M
+  Trade Value (×0.875)      : $27.1M
+  Confidence Range          : $15.1M – $39.0M  (±1 WAR on Yr 1)
+
+  ┌─ Trade Value Assessment ────────────────────────────────────┐
+  │  Talent Tier    :  6/10  solid starter                         │
+  │  Dev Discount   :        (×0.60 dev discount applied)          │
+  │  Contract       :   0    near market rate                      │
+  │  Net Trade Tier :  6     solid return — quality top-100 package│
+  └─────────────────────────────────────────────────────────────┘
+```
+
+**3. Signed veteran, aging contract (Xander Bogaerts, SD)**
+
+```
+$ python player_value.py "Xander Bogaerts"
+
+======================================================================
+  XANDER BOGAERTS — ? | SS | Age 33 | decline phase (-0.5/yr)
+======================================================================
+  WAR      : 2.0 (2026 bWAR (pace))
+  Contract : SIGNED
+  AAV      : $25.45M
+  Service  : 9.042 years
+  NTC      : Full no-trade clause
+
+  Context  : Signed through 2034 at $25.45M AAV — above market
+             (179% of current market value — aging risk). 8 yr(s) of control.
+
+  Surplus Value Breakdown
+  ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
+  Year   Age   WAR      Market     Salary Type         Surplus    Disc.
+  ──────────────────────────────────────────────────────────────────────
+  2026   33    2.0   $   13.9M $ 25.000M fangraphs   $ -11.1M $ -11.1M ◄
+  2027   34    1.2   $    8.7M $ 25.000M fangraphs   $ -16.3M $ -15.5M ◄
+  2028   35    0.5   $    3.4M $ 25.000M fangraphs   $ -21.6M $ -19.6M ◄
+  2029   36    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -21.6M ◄
+  2030   37    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -20.6M ◄
+  2031   38    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -19.6M ◄
+  2032   39    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -18.7M ◄
+  2033   40    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -17.8M ◄
+  ──────────────────────────────────────────────────────────────────────
+  Total Discounted Surplus  : $-144.5M
+  Trade Value (×0.875)      : $-126.4M
+  Underwater years          : 8 of 8 (marked ◄)
+
+  ┌─ Trade Value Assessment ────────────────────────────────────┐
+  │  Talent Tier    :  5/10  average MLB contributor               │
+  │  Contract       :  -3    severely overpaid                     │
+  │  Surplus Pen.   :  -3    catastrophic total surplus (-$126M)   │
+  │  Underwater Pen.:  -3    8 yr(s) negative surplus              │
+  │  Net Trade Tier :   —    salary relief — not a standard asset  │
+  └─────────────────────────────────────────────────────────────┘
+  [!] Tradeability limited: Full no-trade clause
 ```
 
 ---
 
 ## The Trade Database
 
-368 verified trades from 2015–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
+Over 400 verified trades from 2015–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
 
 - **WAR history** — three prior seasons (Marcel-weighted into wWAR), availability grades, trend direction
 - **Contract context** — status, salary, AAV, years of control remaining
 - **Return package** — key pieces with prospect grades at time of trade, return tier 1–10
 
 Return tiers are graded on prospect national rankings **at the time of trade** — not hindsight. A tier 8 in 2022 means those were nationally ranked prospects then, not what they became.
+
+| Tier | Return package |
+|------|----------------|
+| 1 | Cash, PTBNL, or pure salary dump |
+| 2 | Single 40-FV depth piece |
+| 3 | Two 40-FV pieces/one org top-20 |
+| 4 | Org top-15 (45 FV) / two pieces with one cracking org top-20 |
+| 5 | Org top-10 (45–50 FV) / two prospects, one org top-10 |
+| 6 | Org top-5 / national top-100 fringe (50 FV) / projectable MLB-ready piece |
+| 7 | Solid top-100 national (50–55 FV) / top-5 org + depth |
+| 8 | 1–2 top-100 nationals + supporting pieces |
+| 9 | Top-25 national as centerpiece / 2-3+ top-100 nationals / MLB-ready talent + org depth |
+| 10 | Generational haul — rich prospect pool (top-10 national + second top-25 national + additional top-100 depth) AND young high-upside controllable MLB talent already proven in the majors |
 
 **Tier distribution:** Most real trades are depth moves. The database reflects this: ~67% are Tier 1–3, ~20% Tier 4–6, ~10% Tier 7–9. This means comp matching is most reliable for mid-range and depth trades. For elite players (projected Tier 8+), treat the surplus calculation as the primary signal and comps as directional context.
 
@@ -127,7 +204,7 @@ Return tiers are graded on prospect national rankings **at the time of trade** �
 
 - **Juan Soto (2022 and 2023)** — same player, two trades, one year apart: the rental discount in action
 - **Mason Miller (2025)** — raw wWAR 1.7, but leverage-adjusted value explains why Oakland got the #3 overall prospect
-- **Louie Varland (2025)** — 2.02 ERA but negative wWAR: when ERA and WAR tell different stories
+- **Christian Yelich (2018)** — 4 WAR at $7M/yr: why the contract subsidy forced Milwaukee to pay with their best prospect
 
 Open in VS Code or Jupyter: `jupyter notebook trade_value_engine.ipynb`
 
@@ -148,11 +225,12 @@ Python 3.10+ required.
 ### Player surplus value report
 
 ```bash
-python player_value.py "Corbin Carroll"
-python player_value.py "Gerrit Cole" --pitcher
+python player_value.py "Logan Gilbert" --pitcher
+python player_value.py "Isaac Paredes"
+python player_value.py "Xander Bogaerts"
 python player_value.py "Mason Miller" --pitcher --relief-role closer
-python player_value.py "Corbin Carroll" --comps          # run comps after report
-python player_value.py "Corbin Carroll" --comps --trade-type deadline
+python player_value.py "Logan Gilbert" --pitcher --comps    # run comps after report
+python player_value.py "Logan Gilbert" --pitcher --comps --trade-type deadline
 ```
 
 ### Find trade comparables directly
@@ -181,7 +259,7 @@ populate_trades.py       CLI to add new trades to trades.csv
 rebuild_trades_schema.py Canonical schema rebuild (run after WAR reference updates)
 calc_dollar_per_war_auto.py  Automated $/WAR calibration from FA market
 
-trades.csv               368-trade database (the core dataset)
+trades.csv               400+ trade database (the core dataset)
 trade_value_engine.ipynb Narrative analysis notebook with case studies
 ```
 
@@ -198,6 +276,18 @@ trade_value_engine.ipynb Narrative analysis notebook with case studies
 | Arb rates | 40/60/80% of market | arb1/arb2/arb3 est. |
 | Aging curve | +0.25 pre-27, flat 27–30, −0.50 31–33, −0.75 34+ | Per-year WAR delta, approximate |
 
+### How the discount factors interact
+
+Two things reduce a player's trade value below raw surplus: when the production happens, and whether the acquiring team can walk away if it doesn't.
+
+**Time discount (5%/yr).** A surplus dollar in year 3 is worth less than one today. The player might get hurt, decline, or simply not be that good anymore. The math: divide each year's surplus by (1.05)^n, where n is years from now. That formula is just working backwards — if you had that dollar today and invested it at 5%, it would grow to exactly that future amount by year n. Year 3 is worth 90.7 cents. Year 5 is worth 82.3 cents. The 5% rate is on the low end of what baseball research suggests — FanGraphs uses 7–10% — meaning this model gives more credit to future production than most industry frameworks.
+
+**Controllability discount (0.875×).** The $/WAR market rate is set by free agents, who have options. Teams bid against each other, competition drives the price to full value. A team-controlled player has no leverage — he can't opt out if he outperforms, and the acquiring team can't exit if he declines. The trade market prices that asymmetry at 12.5% below equivalent free agent value. This applies once, as a flat multiplier on total trade value, not compounded per year.
+
+Together: year-3 surplus is worth 0.907 × 0.875 = **79 cents on the dollar**.
+
+The one case where this gets messy is arb players. Arb salaries reset toward market each year through the hearing process — if a player declines, his next salary adjusts down. So you're locked in to the player, but not the price. The model doesn't carve out a separate rate for this. Instead, arb players hit a lower tier ceiling than comparable pre-arb or signed players — the discount is built into the caps, not the formula.
+
 ---
 
 ## Limitations
@@ -207,4 +297,24 @@ trade_value_engine.ipynb Narrative analysis notebook with case studies
 - **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
 - **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
 - **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
-- **All fWAR** (not bWAR). Results are not directly comparable to analyses using Baseball Reference WAR.
+- **Primary WAR source is bWAR** (Baseball Reference, annualized from YTD pace). FanGraphs fWAR is used as a fallback via local projection files. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting results.
+
+---
+
+## Further Reading
+
+**WAR methodology**
+- [What is WAR? — FanGraphs Library](https://library.fangraphs.com/misc/war/) — The foundation: what WAR measures, how replacement level is set, and why the stat exists.
+- [fWAR vs. bWAR: What's the Difference? — FanGraphs Library](https://library.fangraphs.com/war/differences-fwar-rwar/) — The specific splits between FIP-based and RA9-based pitching WAR, and UZR vs. DRS for defense.
+- [Baseball-Reference WAR Explained](https://www.baseball-reference.com/about/war_explained.shtml) — Baseball Reference's own documentation of bWAR, including the RA9 pitcher component this model uses as its primary WAR source.
+
+**$/WAR and surplus value**
+- [What Are Teams Paying Per WAR in Free Agency? — FanGraphs (2026)](https://blogs.fangraphs.com/what-are-teams-paying-for-a-win-in-free-agency-2026-edition/) — Annual calibration of the free agent market cost per win. The source for $/WAR benchmarks.
+- [Methodology and Calculations of Dollars per WAR — Hardball Times](https://tht.fangraphs.com/methodology-and-calculations-of-dollars-per-war/) — Matt Swartz's foundational work on deriving $/WAR from FA contracts and why a linear relationship holds.
+- [How Do Baseball Teams Discount the Future? — FanGraphs](https://blogs.fangraphs.com/how-do-baseball-teams-discount-the-future/) — Empirical analysis of the discount rate teams apply to future WAR. Finds ~10% gross, ~7% net of cost-of-win inflation — the basis for the comparison to this model's 5% rate.
+
+**Prospect and trade valuation**
+- [Introducing an Updated Method for Prospect Valuation — FanGraphs](https://blogs.fangraphs.com/introducing-an-updated-method-for-prospect-valuation/) — FanGraphs' surplus value framework for prospects: how team control years are discounted and what Future Value grades translate to in dollar terms.
+- [The Details of Our New Prospect Valuation Methodology — FanGraphs](https://blogs.fangraphs.com/the-details-of-our-new-prospect-valuation-methodology/) — The updated version, with refinements to the 7% discount rate and grade-to-value mappings.
+- [FanGraphs Trade Value Series (2026)](https://blogs.fangraphs.com/2026-trade-value-nos-1-10/) — FanGraphs' annual trade value rankings. Good benchmark for where this model's tiers land vs. industry consensus.
+

@@ -17,16 +17,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from player_value import (project_wars, _TALENT_THRESHOLDS, _DEVELOPMENT_FACTORS,
                           _UNPROVEN_TIER_CAPS, _ARB2_TIER_CAPS, _UNPROVEN_STATUSES,
-                          DISCOUNT_RATE, CONTROL_DISCOUNT)
+                          _SIGNED_LONG_CTRL_CAPS, _RENTAL_TIER_CAPS,
+                          DISCOUNT_RATE, CONTROL_DISCOUNT, DOLLARS_PER_WAR as _DPW,
+                          _contract_adj_from_ratio)
 from comps import DOLLAR_PER_WAR_BY_YEAR
 
-DOLLARS_PER_WAR = 7.0  # current calibration — model uses this, so back-test uses this too
 MLB_MIN = 0.74
 
 
 def talent_value(wWAR, age, n, status="signed"):
     wars = project_wars(max(0.0, wWAR), age, n=n)
-    tv = sum(w * DOLLARS_PER_WAR / ((1 + DISCOUNT_RATE) ** i) for i, w in enumerate(wars))
+    tv = sum(w * _DPW / ((1 + DISCOUNT_RATE) ** i) for i, w in enumerate(wars))
     factor = _DEVELOPMENT_FACTORS.get(status, 1.0)
     return round(tv * CONTROL_DISCOUNT * factor, 2)
 
@@ -45,27 +46,25 @@ def salary_pv(aav, n):
 
 
 def contract_adj(spv, tv):
-    ratio = spv / tv if tv > 0 else 2.0
-    if ratio < 0.25:   return 3
-    if ratio < 0.45:   return 2
-    if ratio < 0.65:   return 1
-    if ratio < 0.85:   return 0
-    if ratio < 1.05:   return 0
-    if ratio < 1.35:   return -1
-    if ratio < 1.75:   return -2
-    return -3
+    return _contract_adj_from_ratio(spv / tv if tv > 0 else 2.0)
 
 
 def severity_pen(wWAR, age, n, aav):
     wars = project_wars(max(0.0, wWAR), age, n=n)
     total = sum(
-        (w * DOLLARS_PER_WAR - aav) / ((1 + DISCOUNT_RATE) ** i)
+        (w * _DPW - aav) / ((1 + DISCOUNT_RATE) ** i)
         for i, w in enumerate(wars)
     ) * CONTROL_DISCOUNT
     if total < -90:   return -3
     if total < -60:   return -2
     if total < -30:   return -1
     return 0
+
+
+def underwater_pen(wWAR, age, n, aav):
+    wars = project_wars(max(0.0, wWAR), age, n=n)
+    n_neg = sum(1 for w in wars if w * _DPW < aav)
+    return -min(n_neg, 3)
 
 
 def run_model(row):
@@ -81,7 +80,8 @@ def run_model(row):
     spv  = salary_pv(aav, n)
     cadj = contract_adj(spv, tv)
     sp   = severity_pen(wWAR, age, n, aav)
-    net  = max(0, min(10, tt + cadj + sp))
+    up   = underwater_pen(wWAR, age, n, aav)
+    net  = max(0, min(10, tt + cadj + sp + up))
 
     if status in _UNPROVEN_STATUSES:
         for wWAR_min, cap in _UNPROVEN_TIER_CAPS:
@@ -90,6 +90,16 @@ def run_model(row):
                 break
     elif status in ("arb2", "arb"):
         for wWAR_min, cap in _ARB2_TIER_CAPS:
+            if wWAR >= wWAR_min:
+                net = min(net, cap)
+                break
+    elif status == "signed" and n >= 7:
+        for wWAR_min, cap in _SIGNED_LONG_CTRL_CAPS:
+            if wWAR >= wWAR_min:
+                net = min(net, cap)
+                break
+    elif status == "rental":
+        for wWAR_min, cap in _RENTAL_TIER_CAPS:
             if wWAR >= wWAR_min:
                 net = min(net, cap)
                 break

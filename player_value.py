@@ -44,6 +44,10 @@ MAX_PROJECTION_YEARS = 8  # cap speculation beyond 8 years
 # Reliever leverage presets (gmLI proxies by role)
 RELIEF_ROLE_LEVERAGE = {"closer": 1.8, "setup": 1.4, "middle": 1.1}
 
+# Games played / remaining — update each season; drives RoS WAR annualization
+GAMES_PLAYED    = 105
+GAMES_REMAINING = 162 - GAMES_PLAYED   # 57
+
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
 ONEDRIVE_BASE = "C:/Users/zach.thomas/OneDrive - Driveline Baseball/"
 
@@ -90,6 +94,33 @@ def lookup_player_ids(player_name):
     matched  = f"{row.get('name_first', '')} {row.get('name_last', '')}".strip()
     print(f"  Matched: {matched}")
     return fg_id, mlbam_id
+
+
+# ── Baseball Reference bWAR — current-season YTD (not blocked by Cloudflare) ──
+def fetch_bref_war_ytd(player_name, is_pitcher, year):
+    """
+    Fetch YTD bWAR from Baseball Reference via pybaseball.bwar_bat/pitch.
+    Returns (war_ytd, games, bref_player_id) or (None, None, None). Caller annualizes.
+    bWAR ≠ fWAR — note the gap when displaying, especially for relievers.
+    """
+    import unicodedata
+
+    def _norm(s):
+        return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+
+    func = pybaseball.bwar_pitch if is_pitcher else pybaseball.bwar_bat
+    df = func(return_all=True)
+    df = df[df["year_ID"] == year]
+    parts = _norm(player_name).split()
+    mask = df["name_common"].apply(lambda s: all(p in _norm(s) for p in parts))
+    rows = df[mask]
+    if rows.empty:
+        return None, None, None
+    row = rows.iloc[0]
+    war      = float(row.get("WAR", 0) or 0)
+    g        = int(row.get("G", 0) or 0)
+    bref_pid = str(row.get("player_ID", "") or "")
+    return (round(war, 2), g, bref_pid) if g > 0 else (None, None, None)
 
 
 # ── Local fWAR xlsx lookup (replaces broken FanGraphs leaderboard API) ─────────
@@ -174,6 +205,8 @@ def fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id=None):
         f"?type={proj_type}&stats={stats}&pos=all&team=0&players=0"
     )
     resp = requests.get(url, headers=HEADERS, timeout=30)
+    if resp.status_code == 403:
+        return None   # FanGraphs blocking automated access; caller falls through to local xlsx
     resp.raise_for_status()
     data = resp.json()
 
@@ -193,11 +226,6 @@ def fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id=None):
         print(f"  Multiple {proj_type} matches — using first: "
               + ", ".join(f"{m['PlayerName']} ({m.get('Team','?')})" for m in matches))
     return matches[0] if matches else None
-
-
-# Keep old name as alias so deadline_board.py / any other callers don't break
-def fetch_zips(player_name, is_pitcher, fg_id=None):
-    return fetch_fg_projection(player_name, is_pitcher, "zips", fg_id)
 
 
 # ── FanGraphs Roster Resource contract data ───────────────────────────────────
@@ -222,7 +250,7 @@ def fetch_fg_contract(fg_id):
     Requires a FanGraphs player ID. Returns None if player not found.
     """
     resp = requests.get(FG_CONTRACTS_API, headers=HEADERS, params={"playerid": fg_id}, timeout=15)
-    if resp.status_code == 404:
+    if resp.status_code in (403, 404):
         return None
     resp.raise_for_status()
     data = resp.json()
@@ -360,6 +388,90 @@ def _fg_row_to_contract(row):
     }
 
 
+# ── Baseball Reference salary scrape (fallback when FG/Spotrac blocked) ────────
+def fetch_bref_contract(bref_player_id):
+    """
+    Scrape salary history from a player's bref page.
+    Returns a minimal contract dict (status, aav, years_remaining) or None.
+    Service time col (index 4) drives arb/FA status: pre-arb < 3.0, FA >= 6.0.
+    """
+    from bs4 import BeautifulSoup, Comment as BsComment
+    url = f"https://www.baseball-reference.com/players/{bref_player_id[0]}/{bref_player_id}.shtml"
+    resp = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
+        timeout=20,
+    )
+    if resp.status_code != 200:
+        return None
+    soup = BeautifulSoup(resp.text, "html.parser")
+    sal_table = None
+    for c in soup.find_all(string=lambda t: isinstance(t, BsComment)):
+        inner = BeautifulSoup(str(c), "html.parser")
+        sal_table = inner.find("table", id="br-salaries")
+        if sal_table:
+            break
+    if sal_table is None:
+        return None
+
+    current_yr = str(CURRENT_YEAR)
+    current_row = None
+    for tr in sal_table.find_all("tr")[1:]:
+        cols = [td.get_text(strip=True) for td in tr.find_all(["th", "td"])]
+        if len(cols) >= 4 and cols[0] == current_yr:
+            current_row = cols
+            break
+    if current_row is None:
+        return None
+
+    raw_salary = current_row[3].replace("$", "").replace(",", "").replace("*", "").strip()
+    service_str = current_row[4].replace("*", "").strip() if len(current_row) > 4 else ""
+    try:
+        aav = round(float(raw_salary) / 1_000_000, 2)
+    except ValueError:
+        return None
+    try:
+        service = float(service_str) if service_str else 0.0
+    except ValueError:
+        service = 0.0
+
+    arb_year_now = None
+    if service >= 6.0:
+        status = "signed"
+        years_remaining = 1
+    elif service >= 5.0:
+        status = "arb"
+        arb_year_now = 3
+        years_remaining = 1
+    elif service >= 4.0:
+        status = "arb"
+        arb_year_now = 2
+        years_remaining = 2
+    elif service >= 3.0:
+        status = "arb"
+        arb_year_now = 1
+        years_remaining = 3
+    else:
+        status = "pre-arb"
+        years_remaining = max(1, round(6.0 - service))
+
+    # Populate yearly with the known current-year salary so build_control_years
+    # uses the actual bref salary rather than falling back to arb/minimum estimates.
+    yearly = [{"year": CURRENT_YEAR, "status": status, "salary_m": aav}] if aav else []
+
+    return {
+        "status": status,
+        "arb_year_now": arb_year_now,
+        "aav": aav,
+        "salaries": [aav] if aav else [],
+        "yearly": yearly,
+        "options": [],
+        "service_time": service,
+        "_years_override": years_remaining,
+        "source": "bref",
+    }
+
+
 # ── Spotrac contract scraping ──────────────────────────────────────────────────
 def fetch_spotrac(player_name):
     # /search/autocomplete/?q=NAME renders the actual player page server-side
@@ -438,11 +550,10 @@ def parse_spotrac(html):
     # Determine overall contract status.
     # If the table has any blank-status or "club/team/vesting" rows after arb rows,
     # the player is on a signed extension (arb salaries are negotiated as part of the deal).
-    def _is_extension_row(st):
-        stl = st.lower()
-        return st == "" or stl in ("club", "team", "signed", "extension", "vesting")
-
-    has_extension_years = any(_is_extension_row(r["status"]) for r in yearly)
+    has_extension_years = any(
+        r["status"] == "" or r["status"].lower() in ("club", "team", "signed", "extension", "vesting")
+        for r in yearly
+    )
     spotrac_status = yearly[0]["status"] if yearly else ""
 
     if has_extension_years:
@@ -464,7 +575,7 @@ def parse_spotrac(html):
     # Compute AAV from signed (non-arb) years
     signed_salaries = [
         r["salary_m"] for r in yearly
-        if r.get("salary_m") and _is_extension_row(r["status"])
+        if r.get("salary_m") and (r["status"] == "" or r["status"].lower() in ("club", "team", "signed", "extension", "vesting"))
     ]
 
     # Scan for a single-player contract summary table (Length / Value / Avg. Salary).
@@ -678,7 +789,31 @@ _ARB2_TIER_CAPS = [
     (1.0,  5),
     (0.0,  4),
 ]
+# Signed players with 7+ years of control: multi-year accumulation in calc_talent_value
+# inflates talent_value beyond what the trade market actually prices. A 4.5 WAR player
+# on a long extension is a star asset, not a franchise asset. Cap derived from baseball
+# reality: at ≥7 years, per-season WAR is the primary talent signal.
+_SIGNED_LONG_CTRL_CAPS = [
+    (5.5, 10),  # true franchise WAR rate — effectively no cap
+    (5.0,  9),
+    (4.0,  8),
+    (3.0,  7),
+    (0.0,  6),
+]
 _UNPROVEN_STATUSES = {"pre-arb", "arb1"}
+
+# Rental players: cheap salary (often minimum) inflates cadj to +3 even for 1-2 WAR
+# players, since ratio = salary_pv / talent_value is tiny. A minimum-salary rental is
+# NOT the same trade asset as a minimum-salary pre-arb player with 6 years of control.
+# Cap reflects that rental return is primarily driven by production, not salary savings.
+_RENTAL_TIER_CAPS = [
+    (6.0, 9),
+    (4.5, 7),
+    (3.5, 5),
+    (2.5, 4),
+    (1.5, 3),
+    (0.0, 2),
+]
 
 _TALENT_LABELS = {
     10: "franchise player",  9: "perennial All-Star",
@@ -701,7 +836,7 @@ _CONTRACT_LABELS = {
 _NET_TIER_LABELS = {
     10: "generational — franchise-defining return",
     9:  "elite haul — multiple top-25 prospects",
-    8:  "franchise haul — multiple top-50 + pieces",
+    8:  "strong haul — 1–2 top-100 nationals + depth",
     7:  "strong return — top-50 prospect + quality pieces",
     6:  "solid return — quality top-100 package",
     5:  "average — org top-5 or MLB depth piece",
@@ -732,6 +867,17 @@ def calc_salary_pv(contract, current_age, war_y1):
                      for i, r in enumerate(rows)), 1)
 
 
+def _contract_adj_from_ratio(ratio):
+    if ratio < 0.25:   return  3
+    if ratio < 0.45:   return  2
+    if ratio < 0.65:   return  1
+    if ratio < 0.85:   return  0
+    if ratio < 1.05:   return  0
+    if ratio < 1.35:   return -1
+    if ratio < 1.75:   return -2
+    return -3
+
+
 def calc_trade_tiers(war_y1, current_age, contract):
     """
     Returns dict with:
@@ -756,14 +902,7 @@ def calc_trade_tiers(war_y1, current_age, contract):
 
     # Contract adjustment: salary burden vs development-adjusted talent value
     ratio = spv / tv if tv > 0 else 2.0
-    if ratio < 0.25:   cadj =  3
-    elif ratio < 0.45: cadj =  2
-    elif ratio < 0.65: cadj =  1
-    elif ratio < 0.85: cadj =  0
-    elif ratio < 1.05: cadj =  0
-    elif ratio < 1.35: cadj = -1
-    elif ratio < 1.75: cadj = -2
-    else:              cadj = -3
+    cadj = _contract_adj_from_ratio(ratio)
 
     # Surplus severity penalty: catastrophically negative contracts reduce net tier
     # further even if talent tier is high. Triggers when total surplus is deeply negative.
@@ -776,7 +915,13 @@ def calc_trade_tiers(war_y1, current_age, contract):
     elif total_surplus < -30: severity_pen = -1
     else:                     severity_pen = 0
 
-    net = max(-3, min(10, tt + cadj + severity_pen))
+    # Underwater year penalty: each contract year with negative surplus is a burden
+    # the acquiring team must absorb. Captures what severity_pen misses when total
+    # surplus is barely positive but individual years go deeply negative.
+    n_negative_ctrl = sum(1 for r in ctrl_rows if r["surplus"] < 0)
+    underwater_pen = -min(n_negative_ctrl, 3)
+
+    net = max(-3, min(10, tt + cadj + severity_pen + underwater_pen))
 
     # Empirical cap for unproven controlled players: surplus formula overvalues
     # multi-year cheap contracts for players who haven't proven they'll stick.
@@ -793,6 +938,16 @@ def calc_trade_tiers(war_y1, current_age, contract):
             if war_y1 >= wWAR_min:
                 tier_cap = cap
                 break
+    elif status == "signed" and n >= 7:
+        for wWAR_min, cap in _SIGNED_LONG_CTRL_CAPS:
+            if war_y1 >= wWAR_min:
+                tier_cap = cap
+                break
+    elif status == "rental":
+        for wWAR_min, cap in _RENTAL_TIER_CAPS:
+            if war_y1 >= wWAR_min:
+                tier_cap = cap
+                break
     if tier_cap is not None:
         net = min(net, tier_cap)
 
@@ -803,15 +958,16 @@ def calc_trade_tiers(war_y1, current_age, contract):
     overpay = round(yr1_salary - market_now, 1) if yr1_salary else 0.0
 
     return {
-        "talent_value":  tv,
-        "talent_tier":   tt,
-        "contract_adj":  cadj,
-        "severity_pen":  severity_pen,
-        "net_tier":      net,
-        "overpay_m":     overpay,
-        "total_surplus": round(total_surplus, 1),
-        "dev_factor":    dev_factor,
-        "tier_cap":      tier_cap,
+        "talent_value":   tv,
+        "talent_tier":    tt,
+        "contract_adj":   cadj,
+        "severity_pen":   severity_pen,
+        "underwater_pen": underwater_pen,
+        "net_tier":       net,
+        "overpay_m":      overpay,
+        "total_surplus":  round(total_surplus, 1),
+        "dev_factor":     dev_factor,
+        "tier_cap":       tier_cap,
     }
 
 
@@ -872,16 +1028,6 @@ def _contract_context(contract, current_age, war_y1):
         )
     return ""
 
-
-def _trade_tier(trade_val):
-    if trade_val >= 150: return "franchise-altering — multiple top-25 prospects + ML pieces"
-    if trade_val >= 100: return "elite — likely requires a top-10 prospect and significant additional return"
-    if trade_val >= 70:  return "very high — top-30 prospect package plus additional pieces"
-    if trade_val >= 40:  return "high — top-50 prospect(s) + depth; significant deal"
-    if trade_val >= 20:  return "mid-tier — 1–2 quality prospects or one near-ready piece"
-    if trade_val >= 5:   return "modest — role player or lower-tier prospect swap"
-    if trade_val >= -10: return "effectively a salary dump — minimal return expected"
-    return "negative — acquiring team likely demands salary relief or a throw-in"
 
 
 def _aging_arc_summary(control_rows, current_age):
@@ -957,7 +1103,12 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     hdr = f"  {'Year':<6} {'Age':<5} {'WAR':<5} {'Market':>9} {'Salary':>10} {'Type':<11} {'Surplus':>8} {'Disc.':>8}"
     print(hdr)
     print(f"  {'─'*70}")
+    fa_divider_printed = False
     for r in control_rows:
+        is_fa = r["salary_type"] in ("UFA", "FA (est.)")
+        if is_fa and not fa_divider_printed:
+            print(f"  {'─'*21}  free agent after {r['year'] - 1}  {'─'*21}")
+            fa_divider_printed = True
         flag = " ◄" if r["surplus"] < 0 else ""
         print(
             f"  {r['year']:<6} {r['age']:<5} {r['war']:<5.1f}"
@@ -995,11 +1146,20 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     if dev_note:
         print(f"  │  Dev Discount   :        {dev_note.strip(): <42}│")
     if tier_cap is not None and net == tier_cap:
-        cap_note = f"capped at {tier_cap} — unproven at {war_y1:.1f} wWAR (data-derived)"
+        status_for_cap = contract.get("status", "signed")
+        if status_for_cap == "signed" and contract_n_years(contract) >= 7:
+            cap_note = f"capped at {tier_cap} — long deal: per-season WAR ({war_y1:.1f}) drives tier"
+        elif status_for_cap == "rental":
+            cap_note = f"capped at {tier_cap} — rental return driven by production, not salary savings"
+        else:
+            cap_note = f"capped at {tier_cap} — unproven at {war_y1:.1f} wWAR (data-derived)"
         print(f"  │  WAR Floor Cap  :        {cap_note: <42}│")
     print(f"  │  Contract       : {cadj_str:>3}    {_CONTRACT_LABELS.get(cadj, ''): <38}│")
     if spen < 0:
         print(f"  │  Surplus Pen.   : {spen:>3}    catastrophic total surplus (-${abs(tiers['total_surplus']):.0f}M) {'':15}│")
+    upen = tiers.get("underwater_pen", 0)
+    if upen < 0:
+        print(f"  │  Underwater Pen.: {upen:>3}    {n_negative} yr(s) negative surplus — burden on acquirer{'':6}│")
     if net <= 3:
         print(f"  │  Net Trade Tier :   —    {'salary relief — not a standard trade asset': <38}│")
     else:
@@ -1015,7 +1175,12 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     print(f"      or no-trade clauses can significantly lower actual return.")
     print()
 
-    flags = ["fWAR throughout (bWAR not used) — source: local OneDrive xlsx"]
+    war_src = (proj_sources or {})
+    if any("bWAR" in k for k in war_src):
+        war_note = "WAR source: Baseball Reference bWAR (annualized from YTD pace) — not fWAR"
+    else:
+        war_note = "WAR source: local OneDrive fWAR xlsx or manual override"
+    flags = [war_note]
     if is_pitcher and leverage == 1.0:
         flags.append("RP/SP: leverage not applied — add --relief-role {closer|setup|middle} for relievers")
     if is_pitcher:
@@ -1069,49 +1234,65 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
     war_y1 = war_override
     proj_sources = {}
     _proj_rows = {}
+    _bref_pid = None   # set when bref WAR fetch succeeds; reused for contract lookup
 
     if war_y1 is None:
-        for proj_type, label in (("thebatx", "THE BAT X"), ("zips", "ZiPS")):
+        # Current-year bWAR from Baseball Reference (not Cloudflare-blocked) — annualize from pace
+        log(f"  Fetching {CURRENT_YEAR} YTD bWAR from Baseball Reference...")
+        bref_war, bref_g, bref_pid_tmp = fetch_bref_war_ytd(player_name, is_pitcher, CURRENT_YEAR)
+        if bref_war is not None and bref_g >= 5:
+            _bref_pid = bref_pid_tmp
+            # Pitchers: SP makes 1 start per ~5 team games, so pitcher G << team games.
+            # Use team GAMES_PLAYED as the season-fraction denominator for pitchers.
+            # Batters: player G reflects actual playing-time pace — use directly.
+            denom = GAMES_PLAYED if is_pitcher else bref_g
+            war_annual = round(bref_war * (162 / denom), 2)
+            if is_pitcher:
+                log(f"  bWAR YTD: {bref_war:.2f} in {bref_g} app → {war_annual:.2f} annualized (/{GAMES_PLAYED} team games)")
+            else:
+                log(f"  bWAR YTD: {bref_war:.2f} in {bref_g}G → {war_annual:.2f} annualized")
+            war_y1 = war_annual
+            proj_sources[f"{CURRENT_YEAR} bWAR (pace)"] = war_annual
+
+    if war_y1 is None:
+        # Rest-of-season projections (preferred mid-season); annualize to full-season rate
+        for proj_type, label in (("rzips", "ZiPS RoS"), ("rsteamer", "Steamer RoS")):
             log(f"  Fetching {label} projection...")
             row = fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id)
             if row:
                 w = float(row.get("WAR") or 0)
                 if w:
-                    proj_sources[label] = round(w, 1)
+                    w_annual = round(w * (162 / GAMES_REMAINING), 2)
+                    proj_sources[label] = w_annual
                     _proj_rows[label] = row
-                    log(f"    {label}: {w:.1f} WAR")
+                    log(f"    {label}: {w:.1f} RoS WAR → {w_annual:.1f} annualized ({GAMES_REMAINING} games remaining)")
 
         if proj_sources:
             war_y1 = round(sum(proj_sources.values()) / len(proj_sources), 2)
-            log(f"  Projection avg: {war_y1:.2f}")
+            log(f"  Projection avg (annualized): {war_y1:.2f}")
         else:
-            log(f"  No projections — falling back to {CURRENT_YEAR - 1} fWAR from local xlsx...")
-            war_y1, _ = fetch_war_from_xlsx(player_name, is_pitcher, CURRENT_YEAR - 1)
-            if war_y1 is None:
-                log(f"  Not found in {CURRENT_YEAR - 1}, trying {CURRENT_YEAR - 2}...")
-                war_y1, _ = fetch_war_from_xlsx(player_name, is_pitcher, CURRENT_YEAR - 2)
+            # Local xlsx fallback: try current year first (annualize partial season), then prior years
+            for yr in (CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2):
+                w, g = fetch_war_from_xlsx(player_name, is_pitcher, yr)
+                if w is not None:
+                    if yr == CURRENT_YEAR and g and g < 150:
+                        w = round(w * (162 / g), 2)
+                        log(f"  {yr} fWAR (annualized from {g}G): {w}")
+                        proj_sources[f"{yr} fWAR (pace)"] = w
+                    else:
+                        log(f"  {yr} fWAR: {w}")
+                        proj_sources[f"{yr} fWAR"] = w
+                    war_y1 = w
+                    break
             if war_y1 is None:
                 return {"player_name": player_name, "error": "WAR not found. Use --war to supply it."}
-            proj_sources["historical fWAR"] = round(war_y1, 1)
-            log(f"  Historical fWAR: {war_y1}")
 
     _meta_row = _proj_rows.get("THE BAT X") or _proj_rows.get("ZiPS") or {}
     zips_row = {"PlayerName": player_name, "Team": _meta_row.get("Team", "?"), "xMLBAMID": mlbam_id}
 
-    # Auto-fetch GS/G from MLB Stats API when --war given without --gs/--g
+    # Auto-fetch GS/G from MLB Stats API only when --gs/--g explicitly requested
+    # --war alone is treated as a full-season number; pass --g to annualize from pace
     _gs, _g = gs, g
-    if war_override is not None and gs is None and g is None and mlbam_id:
-        try:
-            fetched = fetch_current_season_gs(int(mlbam_id), is_pitcher)
-            if fetched and int(fetched) > 0:
-                if is_pitcher:
-                    _gs = int(fetched)
-                    log(f"  Auto-fetched GS: {_gs} (MLB Stats API {CURRENT_YEAR})")
-                else:
-                    _g = int(fetched)
-                    log(f"  Auto-fetched G: {_g} (MLB Stats API {CURRENT_YEAR})")
-        except Exception as e:
-            log(f"  GS auto-fetch warning: {e}")
 
     # Pace annualization: --war <partial> with GS/G (manual or auto-fetched)
     if (_gs is not None or _g is not None) and war_override is not None:
@@ -1151,6 +1332,9 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
         if contract is None:
             return {"player_name": player_name, "error": f"Not found in {fg_csv_path}"}
         log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs CSV]")
+    elif aav_override is not None and years_override is not None:
+        contract = {"status": "signed", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": aav_override}
+        log(f"  Using manual contract overrides — skipping API fetch")
     else:
         # Spotrac first — more accurate year counts for extensions/rentals.
         # Fall back to FanGraphs when Spotrac returns None or "unknown" (recently signed deals).
@@ -1168,8 +1352,15 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
                     contract = fg_contract
                     log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs]")
             if contract is None or contract.get("status") == "unknown":
-                contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
-                log("  No contract data found — using pre-arb defaults")
+                if _bref_pid:
+                    log("  Trying Baseball Reference salary page...")
+                    bref_ct = fetch_bref_contract(_bref_pid)
+                    if bref_ct:
+                        contract = bref_ct
+                        log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M | {contract['_years_override']} yr(s) remaining  [source: bref]")
+                if contract is None or contract.get("status") == "unknown":
+                    contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
+                    log("  No contract data found — using pre-arb defaults")
 
     # Contract overrides (correct stale API data)
     if years_override is not None:
