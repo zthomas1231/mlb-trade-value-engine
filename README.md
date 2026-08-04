@@ -240,15 +240,6 @@ python comps.py --war 1.5 --age 25 --years 5 --status pre-arb --position RP
 python comps.py --war 4.9 --age 26 --years 4 --status signed --position OF --salary 7
 ```
 
-### Add a trade to the database
-
-```bash
-python populate_trades.py "Manny Machado" 2018-07-18 BAL LAD rental 0 7
-python populate_trades.py "Daulton Varsho" 2022-12-08 ARI TOR arb1 4 7 --salary 0.72
-```
-
----
-
 ## Project Structure
 
 ```
