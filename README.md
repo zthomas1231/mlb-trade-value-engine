@@ -9,7 +9,6 @@ A tool for estimating fair trade return for any MLB player based on surplus prod
 Juan Soto got traded twice in thirteen months for two completely different returns. Same player, same production, same team control window shrinking by exactly one year. If you can explain why those two packages looked so different, you understand what this project is trying to measure.
 
 A few things distort how a trade gets judged in the moment. Rentals get overvalued in the reaction and undervalued in hindsight: the player already in the majors gets the headlines, while the prospect coming back can end up outproducing him over a full control window, the way Soto's two trades priced so differently once his control window shrank. Sell-high moves run the same distortion in reverse, called premature right up until the player declines and the return looks fair all along. Retrospectives also cherry-pick their examples, since the prospects who become the story are the ones who actually developed, while most traded prospects never do. And not every team is optimizing for pure value in the first place, a contender in a tight window will take a lighter return because the player fills a need right now, not because the deal was mispriced.
----
 
 ## How It Works
 
