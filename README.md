@@ -282,13 +282,11 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 
 ## Limitations
 
-- **Sparse high-tier comps.** The database has 25 trades at Tier 7–9 and none at Tier 10. For elite players, the surplus value calculation is the primary signal — comps provide directional context, not a precise anchor.
+- **Sparse high-tier comps.** Only 25 trades in the database land at Tier 7–9, and none reach Tier 10. For elite players, that means the surplus value calculation is doing most of the work. The comps are useful for directional context, but they're not precise enough to anchor a number on their own. Any young controllable star will give tier 10 (Bobby Witt Jr., Corbin Carroll, Kevin McGonigle, etc).
 - **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
-- **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
-- **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
-- **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
-- **Primary WAR source is bWAR** (Baseball Reference, annualized from YTD pace). FanGraphs fWAR is used as a fallback via local projection files. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting results.
-
+- **ERA/WAR divergence for recent role changes.** If a starter converts to reliever, their starter history still lives in wWAR. The leverage adjustment corrects for some of this, but one season of relief data isn't enough to fully reprice them.
+- **Aging curve is uniform.** The per-year WAR deltas don't distinguish player types, even though a contact hitter, a power hitter, and a pitcher all age differently in reality.
+- **Mixed WAR sources** The historical comps database (trades.csv) uses Fangraphs fWAR throughout. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace), falling back to local fWAR projection when live data is unavailable.
 ---
 
 ## Further Reading
