@@ -43,7 +43,7 @@ import pybaseball
 
 TRADES_CSV = Path(__file__).parent / "trades.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
-ONEDRIVE_BASE = "C:/Users/zach.thomas/OneDrive - Driveline Baseball/"
+ONEDRIVE_BASE = str(Path.home() / "OneDrive - Driveline Baseball") + "/"
 
 FIELDNAMES = [
     "trade_id", "player_name", "trade_date", "season", "trade_type",

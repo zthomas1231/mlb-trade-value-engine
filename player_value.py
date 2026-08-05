@@ -49,7 +49,7 @@ GAMES_PLAYED    = 105
 GAMES_REMAINING = 162 - GAMES_PLAYED   # 57
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
-ONEDRIVE_BASE = "C:/Users/zach.thomas/OneDrive - Driveline Baseball/"
+ONEDRIVE_BASE = str(Path.home() / "OneDrive - Driveline Baseball") + "/"
 
 
 # ── Aging curve ────────────────────────────────────────────────────────────────
@@ -78,6 +78,21 @@ def arb_salary(market_value_m, arb_year):
 # Keyed by lowercase player name. Use when all three API sources return wrong
 # year counts (bref salary page only shows current year for multi-year deals).
 _CONTRACT_OVERRIDES = {
+    "corbin carroll": {
+        "status": "signed",
+        "aav": 13.875,
+        "yearly": [
+            {"year": 2026, "status": "signed", "salary_m": 20.625},
+            {"year": 2027, "status": "signed", "salary_m": 12.625},
+            {"year": 2028, "status": "signed", "salary_m": 14.625},
+            {"year": 2029, "status": "signed", "salary_m": 28.625},
+            {"year": 2030, "status": "signed", "salary_m": 28.625},
+        ],
+        "salaries": [20.625, 12.625, 14.625, 28.625, 28.625],
+        "options": ["club option (2031, $28.0M)"],
+        "service_time": 3.038,
+        "source": "manual",
+    },
     "xander bogaerts": {
         "status": "signed",
         "aav": 25.45,
@@ -1221,7 +1236,7 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     if any("bWAR" in k for k in war_src):
         war_note = "WAR source: Baseball Reference bWAR (annualized from YTD pace) — not fWAR"
     else:
-        war_note = "WAR source: local OneDrive fWAR xlsx or manual override"
+        war_note = "WAR source: local fWAR xlsx or manual override"
     flags = [war_note]
     if is_pitcher and leverage == 1.0:
         flags.append("RP/SP: leverage not applied — add --relief-role {closer|setup|middle} for relievers")

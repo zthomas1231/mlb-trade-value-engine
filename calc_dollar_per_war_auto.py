@@ -28,6 +28,7 @@ import tempfile
 import time
 import argparse
 from collections import defaultdict
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,7 +37,7 @@ import pybaseball
 
 pybaseball.cache.enable()
 
-FG_WAR_DIR_DEFAULT = r"C:\Users\zach.thomas\OneDrive - Driveline Baseball"
+FG_WAR_DIR_DEFAULT = str(Path.home() / "OneDrive - Driveline Baseball")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

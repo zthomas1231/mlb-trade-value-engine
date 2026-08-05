@@ -1,6 +1,6 @@
 # MLB Trade Value Engine
 
-A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and over 400 verified historical trades (2016–2026).
+A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 362 verified historical trades (2015–2026).
 
 ---
 
@@ -9,6 +9,8 @@ A tool for estimating fair trade return for any MLB player based on surplus prod
 Juan Soto got traded twice in thirteen months for two completely different returns. Same player, same production, same team control window shrinking by exactly one year. If you can explain why those two packages looked so different, you understand what this project is trying to measure.
 
 A few things distort how a trade gets judged in the moment. Rentals get overvalued in the reaction and undervalued in hindsight: the player already in the majors gets the headlines, while the prospect coming back can end up outproducing him over a full control window, the way Soto's two trades priced so differently once his control window shrank. Sell-high moves run the same distortion in reverse, called premature right up until the player declines and the return looks fair all along. Retrospectives also cherry-pick their examples, since the prospects who become the story are the ones who actually developed, while most traded prospects never do. And not every team is optimizing for pure value in the first place, a contender in a tight window will take a lighter return because the player fills a need right now, not because the deal was mispriced.
+
+---
 
 ## How It Works
 
@@ -39,7 +41,7 @@ The model converts surplus into a **Net Trade Tier** (1–10) by combining three
 | Contract Adj | −3 to +3 | How team-friendly or burdensome the salary is |
 | Severity Penalty | 0 to −3 | Fires on deeply negative surplus (albatross contracts) |
 
-Tier thresholds are calibrated against the surplus values of the 368 verified trades in the database. Tier 9 represents the highest return grade in the historical data. The Soto trade (Abrams, Gore, Hassell, Wood, Susana) produced the highest return and would represent a Tier 10 in isolation, but drops to Tier 9 to account for Bell's inclusion in the package sent back the other way.
+Tier thresholds are calibrated against the surplus values of the 362 verified trades in the database. Tier 9 represents the highest return grade in the historical data. The Soto trade (Abrams, Gore, Hassell, Wood, Susana) produced the highest return and would represent a Tier 10 in isolation, but drops to Tier 9 to account for Bell's inclusion in the package sent back the other way.
 
 Historical comps search the database by wWAR, age, years of control, and contract status. When salary is provided, comp scoring also factors in WAR-salary ratio and end-age. The closest matches anchor the expected return range and give real-world grounding to what the surplus model projects. The database is concentrated in Tiers 1–6 — depth and mid-range moves make up the majority of real trades. For elite players (Tier 7+), the surplus calculation carries more weight than the comp matches.
 
@@ -282,11 +284,21 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 
 ## Limitations
 
+<<<<<<< HEAD
 - **Sparse high-tier comps.** Only 25 trades in the database land at Tier 7–9, and none reach Tier 10. For elite players, that means the surplus value calculation is doing most of the work. The comps are useful for directional context, but they're not precise enough to anchor a number on their own. Any young controllable star will give tier 10 (Bobby Witt Jr., Corbin Carroll, Kevin McGonigle, etc).
 - **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
 - **ERA/WAR divergence for recent role changes.** If a starter converts to reliever, their starter history still lives in wWAR. The leverage adjustment corrects for some of this, but one season of relief data isn't enough to fully reprice them.
 - **Aging curve is uniform.** The per-year WAR deltas don't distinguish player types, even though a contact hitter, a power hitter, and a pitcher all age differently in reality.
 - **Mixed WAR sources** The historical comps database (trades.csv) uses Fangraphs fWAR throughout. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace), falling back to local fWAR projection when live data is unavailable.
+=======
+- **Sparse high-tier comps.** The database has 28 trades at Tier 7–9 and none at Tier 10. For elite players, the surplus value calculation is the primary signal — comps provide directional context, not a precise anchor.
+- **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
+- **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
+- **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
+- **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
+- **Mixed WAR sources.** The historical comps database (trades.csv) uses FanGraphs fWAR throughout — fWAR is the standard in surplus value research and FanGraphs bulk historical data is cleanly available. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace) because FanGraphs blocks programmatic access to live data; bWAR is the only reliable real-time source. The fallback is local fWAR projection files (THE BAT X / ZiPS), which are pre-season estimates that don't update mid-season. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting pitcher results.
+
+>>>>>>> 275fdb4 (Remove hardcoded username from file paths; fix README trade counts)
 ---
 
 ## Further Reading
