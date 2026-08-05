@@ -1,6 +1,6 @@
 # MLB Trade Value Engine
 
-A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 362 verified historical trades (2015–2026).
+A tool for estimating fair trade return for any MLB player based on surplus production, contract context, and 370 verified historical trades (2015–2026).
 
 ---
 
@@ -41,7 +41,7 @@ The model converts surplus into a **Net Trade Tier** (1–10) by combining three
 | Contract Adj | −3 to +3 | How team-friendly or burdensome the salary is |
 | Severity Penalty | 0 to −3 | Fires on deeply negative surplus (albatross contracts) |
 
-Tier thresholds are calibrated against the surplus values of the 362 verified trades in the database. Tier 9 represents the highest return grade in the historical data. The Soto trade (Abrams, Gore, Hassell, Wood, Susana) produced the highest return and would represent a Tier 10 in isolation, but drops to Tier 9 to account for Bell's inclusion in the package sent back the other way.
+Tier thresholds are calibrated against the surplus values of the 370 verified trades in the database. Tier 9 represents the highest return grade in the historical data. The Soto trade (Abrams, Gore, Hassell, Wood, Susana) produced the highest return and would represent a Tier 10 in isolation, but drops to Tier 9 to account for Bell's inclusion in the package sent back the other way.
 
 Historical comps search the database by wWAR, age, years of control, and contract status. When salary is provided, comp scoring also factors in WAR-salary ratio and end-age. The closest matches anchor the expected return range and give real-world grounding to what the surplus model projects. The database is concentrated in Tiers 1–6 — depth and mid-range moves make up the majority of real trades. For elite players (Tier 7+), the surplus calculation carries more weight than the comp matches.
 
@@ -174,7 +174,7 @@ $ python player_value.py "Xander Bogaerts"
 
 ## The Trade Database
 
-Over 400 verified trades from 2015–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
+370 verified trades from 2015–2026, concentrated in 2021–2025 (the core of the dataset). Each entry includes:
 
 - **WAR history** — three prior seasons (Marcel-weighted into wWAR), availability grades, trend direction
 - **Contract context** — status, salary, AAV, years of control remaining
@@ -251,7 +251,7 @@ populate_trades.py       CLI to add new trades to trades.csv
 rebuild_trades_schema.py Canonical schema rebuild (run after WAR reference updates)
 calc_dollar_per_war_auto.py  Automated $/WAR calibration from FA market
 
-trades.csv               400+ trade database (the core dataset)
+trades.csv               370-trade database (the core dataset)
 trade_value_engine.ipynb Narrative analysis notebook with case studies
 ```
 
@@ -284,21 +284,12 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 
 ## Limitations
 
-<<<<<<< HEAD
-- **Sparse high-tier comps.** Only 25 trades in the database land at Tier 7–9, and none reach Tier 10. For elite players, that means the surplus value calculation is doing most of the work. The comps are useful for directional context, but they're not precise enough to anchor a number on their own. Any young controllable star will give tier 10 (Bobby Witt Jr., Corbin Carroll, Kevin McGonigle, etc).
-- **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
-- **ERA/WAR divergence for recent role changes.** If a starter converts to reliever, their starter history still lives in wWAR. The leverage adjustment corrects for some of this, but one season of relief data isn't enough to fully reprice them.
-- **Aging curve is uniform.** The per-year WAR deltas don't distinguish player types, even though a contact hitter, a power hitter, and a pitcher all age differently in reality.
-- **Mixed WAR sources** The historical comps database (trades.csv) uses Fangraphs fWAR throughout. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace), falling back to local fWAR projection when live data is unavailable.
-=======
-- **Sparse high-tier comps.** The database has 28 trades at Tier 7–9 and none at Tier 10. For elite players, the surplus value calculation is the primary signal — comps provide directional context, not a precise anchor.
+- **Sparse high-tier comps.** The database has 28 trades at Tier 7–9 and none at Tier 10. For elite players, the surplus value calculation is the primary signal — comps provide directional context, not a precise anchor. Elite young players on team-friendly extensions (Witt Jr., Carroll, McGonigle) will always project to Tier 10 — the surplus math is real, and these are genuinely rare trade assets.
 - **Injury history is not modeled.** The surplus table assumes a healthy player. Significant injury history lowers actual trade value and should be discounted manually.
 - **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
 - **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
 - **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
 - **Mixed WAR sources.** The historical comps database (trades.csv) uses FanGraphs fWAR throughout — fWAR is the standard in surplus value research and FanGraphs bulk historical data is cleanly available. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace) because FanGraphs blocks programmatic access to live data; bWAR is the only reliable real-time source. The fallback is local fWAR projection files (THE BAT X / ZiPS), which are pre-season estimates that don't update mid-season. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting pitcher results.
-
->>>>>>> 275fdb4 (Remove hardcoded username from file paths; fix README trade counts)
 ---
 
 ## Further Reading
