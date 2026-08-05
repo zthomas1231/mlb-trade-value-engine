@@ -19,10 +19,19 @@ from player_value import (project_wars, _TALENT_THRESHOLDS, _DEVELOPMENT_FACTORS
                           _UNPROVEN_TIER_CAPS, _ARB2_TIER_CAPS, _UNPROVEN_STATUSES,
                           _SIGNED_LONG_CTRL_CAPS, _RENTAL_TIER_CAPS,
                           DISCOUNT_RATE, CONTROL_DISCOUNT, DOLLARS_PER_WAR as _DPW,
-                          _contract_adj_from_ratio)
+                          _contract_adj_from_ratio, RELIEF_ROLE_LEVERAGE)
 from comps import DOLLAR_PER_WAR_BY_YEAR
 
 MLB_MIN = 0.74
+
+# trades.csv has no relief_role column; estimate from wWAR as a proxy.
+# Thresholds are rough (not ground truth) — a future relief_role column would fix this properly.
+def _rp_leverage(wWAR):
+    if wWAR >= 2.5:
+        return RELIEF_ROLE_LEVERAGE["closer"]   # 1.8
+    if wWAR >= 1.5:
+        return RELIEF_ROLE_LEVERAGE["setup"]    # 1.4
+    return RELIEF_ROLE_LEVERAGE["middle"]       # 1.1
 
 
 def talent_value(wWAR, age, n, status="signed"):
@@ -75,38 +84,43 @@ def run_model(row):
     aav    = float(row["aav_m"]) if pd.notna(row.get("aav_m")) and row["aav_m"] > 0 else (
              float(row["salary_m"]) if pd.notna(row.get("salary_m")) and row["salary_m"] > 0 else MLB_MIN)
 
-    tv   = talent_value(wWAR, age, n, status)
+    is_rp = str(row.get("position_group", "")).strip().upper() == "RP"
+    leverage = _rp_leverage(wWAR) if is_rp else 1.0
+    ew = round(wWAR * leverage, 2)  # effective wWAR after leverage
+
+    tv   = talent_value(ew, age, n, status)
     tt   = talent_tier(tv)
     spv  = salary_pv(aav, n)
     cadj = contract_adj(spv, tv)
-    sp   = severity_pen(wWAR, age, n, aav)
-    up   = underwater_pen(wWAR, age, n, aav)
+    sp   = severity_pen(ew, age, n, aav)
+    up   = underwater_pen(ew, age, n, aav)
     net  = max(0, min(10, tt + cadj + sp + up))
 
     if status in _UNPROVEN_STATUSES:
         for wWAR_min, cap in _UNPROVEN_TIER_CAPS:
-            if wWAR >= wWAR_min:
+            if ew >= wWAR_min:
                 net = min(net, cap)
                 break
     elif status in ("arb2", "arb"):
         for wWAR_min, cap in _ARB2_TIER_CAPS:
-            if wWAR >= wWAR_min:
+            if ew >= wWAR_min:
                 net = min(net, cap)
                 break
     elif status == "signed" and n >= 7:
         for wWAR_min, cap in _SIGNED_LONG_CTRL_CAPS:
-            if wWAR >= wWAR_min:
+            if ew >= wWAR_min:
                 net = min(net, cap)
                 break
     elif status == "rental":
         for wWAR_min, cap in _RENTAL_TIER_CAPS:
-            if wWAR >= wWAR_min:
+            if ew >= wWAR_min:
                 net = min(net, cap)
                 break
 
     return {
         "tv": tv, "talent_tier": tt, "cadj": cadj,
         "severity_pen": sp, "model_tier": net,
+        "leverage": leverage, "eff_wWAR": ew,
     }
 
 
@@ -128,9 +142,12 @@ def main():
             "player":      r["player_name"],
             "year":        str(r["trade_date"])[:4],
             "wWAR":        r["wWAR"],
+            "eff_wWAR":    m["eff_wWAR"],
+            "leverage":    m["leverage"],
             "age":         int(r["age_at_trade"]),
             "n":           max(1, int(r["years_control_remaining"])),
             "status":      r.get("contract_status", "?"),
+            "position":    r.get("position_group", "?"),
             "tv":          m["tv"],
             "talent_tier": m["talent_tier"],
             "cadj":        m["cadj"],
@@ -149,9 +166,12 @@ def main():
     within1 = (res["error"].abs() <= 1).mean()
     within2 = (res["error"].abs() <= 2).mean()
 
+    rp_rows = res[res["position"] == "RP"]
     print(f"\n{'='*60}")
     print(f"  BACK-TEST RESULTS  ({len(res)} trades analyzed)")
     print(f"{'='*60}")
+    print(f"  Note: {len(rp_rows)} RP rows use wWAR-proxy leverage (no relief_role column in schema).")
+    print(f"        wWAR≥2.5→closer(1.8×), ≥1.5→setup(1.4×), else middle(1.1×). Heuristic only.")
     print(f"  Pearson r    : {r_val:.3f}  (p = {pval:.2e})")
     print(f"  MAE          : {mae:.2f} tiers")
     print(f"  RMSE         : {rmse:.2f} tiers")
