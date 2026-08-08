@@ -620,6 +620,9 @@ def parse_spotrac(html):
 
     # UFA rows are not controlled years — strip them before any downstream logic.
     yearly = [r for r in yearly if r["status"].upper() != "UFA"]
+    # Strip bonus/breakdown sub-rows where Spotrac puts a dollar amount in the status column
+    # (e.g. "$5,117,647" signing bonus rows). These are not contract status labels.
+    yearly = [r for r in yearly if not r["status"].startswith("$")]
 
     # Determine overall contract status.
     # If the table has any blank-status or "club/team/vesting" rows after arb rows,
@@ -743,12 +746,12 @@ def build_control_years(contract, current_age, war_projections):
     service_time = contract.get("service_time") or 0.0
     arb_year_now = contract.get("arb_year_now") or 1
 
-    # Build a year→salary lookup from Spotrac per-year data if available
-    spotrac_salary = {
-        r["year"]: r["salary_m"]
-        for r in contract.get("yearly", [])
-        if r.get("salary_m") is not None
-    }
+    # Build a year→salary lookup from Spotrac per-year data if available.
+    # Use max per year so any residual duplicate rows don't clobber the real salary.
+    spotrac_salary = {}
+    for r in contract.get("yearly", []):
+        if r.get("salary_m") is not None:
+            spotrac_salary[r["year"]] = max(spotrac_salary.get(r["year"], 0), r["salary_m"])
 
     # How many pre-arb years remain before arb kicks in
     pre_arb_left = max(0, int(3.0 - service_time)) if status == "pre-arb" else 0
