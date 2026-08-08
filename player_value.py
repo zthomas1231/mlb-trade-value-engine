@@ -683,9 +683,16 @@ def parse_spotrac(html):
         raw_aav = float(aav_m.group(1).replace(",", ""))
         aav = raw_aav if raw_aav < 1_000 else raw_aav / 1_000_000
 
+    # Total arb years: arb_year_now + remaining arb entries after current year
+    total_arb_years = None
+    if status == "arb" and arb_year_now is not None:
+        arb_entries = [r for r in yearly if "arb" in r["status"].lower()]
+        total_arb_years = arb_year_now + max(0, len(arb_entries) - 1)
+
     return {
         "status": status,
         "arb_year_now": arb_year_now,
+        "total_arb_years": total_arb_years,
         "salaries": salaries,
         "yearly": yearly,
         "options": options,
@@ -1064,10 +1071,12 @@ def _contract_context(contract, current_age, war_y1):
         )
     if status == "arb":
         arb_now = contract.get("arb_year_now") or 1
+        total_arb = contract.get("total_arb_years") or 3
+        remaining = total_arb - arb_now + 1
         return (
-            f"Arb {arb_now} of 3 — salary estimated at {int(ARB_RATES[arb_now]*100)}% of ${market:.1f}M market value. "
-            f"3 remaining arb years before free agency. "
-            f"No extension — trade value declines sharply at each arb step."
+            f"Arb {arb_now} of {total_arb} — salary estimated at {int(ARB_RATES[min(arb_now, 4)]*100)}% of ${market:.1f}M market value. "
+            f"{remaining} remaining arb year(s) before free agency. "
+            f"No extension signed — trade value declines at each arb step."
         )
     if status == "signed":
         yearly = contract.get("yearly", [])
@@ -1304,7 +1313,7 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
 
 
 # ── Shared compute ─────────────────────────────────────────────────────────────
-def evaluate_player(player_name, is_pitcher=False, age_override=None, war_override=None,
+def evaluate_player(player_name, is_pitcher=None, age_override=None, war_override=None,
                     use_spotrac=True, fg_csv_path=None, relief_role=None,
                     leverage_override=None, trade_type=None, run_comps=False,
                     min_comps=3, quiet=False,
@@ -1324,6 +1333,7 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
     # Primary: search FanGraphs xlsx — authoritative for active current-season players.
     # Checks the expected position file first, then the other. Xlsx has correct PlayerId + MLBAMID.
     _parts = _norm_ascii(player_name).split()
+    _xlsx_detected_pitcher = None
     for _pit in ([is_pitcher, not is_pitcher] if is_pitcher is not None else [False, True]):
         _xp = _xlsx_path(CURRENT_YEAR, _pit)
         if not Path(_xp).exists():
@@ -1338,6 +1348,7 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
                     fg_id = str(int(_fgid))
                 if _mlb is not None and not (isinstance(_mlb, float) and math.isnan(_mlb)):
                     mlbam_id = int(_mlb)
+                _xlsx_detected_pitcher = _pit
                 log(f"  Matched via xlsx: {_xrow.iloc[0]}")
                 break
         if fg_id or mlbam_id:
@@ -1348,6 +1359,19 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
         fg_id, mlbam_id = lookup_player_ids(player_name)
 
     log(f"  FanGraphs ID: {fg_id}" if fg_id else "  FanGraphs ID not found")
+
+    # Auto-detect pitcher when not explicitly set by caller.
+    if is_pitcher is None:
+        if _xlsx_detected_pitcher is not None:
+            is_pitcher = _xlsx_detected_pitcher
+        elif mlbam_id:
+            _quick_info = fetch_mlb_player_info(int(mlbam_id))
+            _pos = (_quick_info.get("position") or "").upper()
+            is_pitcher = _pos in ("P", "SP", "RP", "TWP", "LHP", "RHP")
+            if is_pitcher:
+                log(f"  Auto-detected as pitcher (MLB position: {_pos})")
+        else:
+            is_pitcher = False
 
     war_y1 = war_override
     proj_sources = {}
@@ -1665,30 +1689,23 @@ def _interactive_mode():
         if name.lower() in ("q", "quit", "exit", ""):
             break
 
-        pit_raw = input("Pitcher? (y/n): ").strip().lower()
-        if pit_raw in ("q", "quit"):
-            break
-        is_pitcher = pit_raw == "y"
-
         relief_role = None
-        if is_pitcher:
-            rel_raw = input("Reliever/closer? (y/n): ").strip().lower()
-            if rel_raw in ("q", "quit"):
-                break
-            if rel_raw == "y":
-                role_raw = input("Role — closer / setup / middle [closer]: ").strip().lower()
-                relief_role = role_raw if role_raw in ("closer", "setup", "middle") else "closer"
+        role_raw = input("Reliever/closer? (y/n — skip if not a reliever): ").strip().lower()
+        if role_raw in ("q", "quit"):
+            break
+        if role_raw == "y":
+            role_raw2 = input("Role — closer / setup / middle [closer]: ").strip().lower()
+            relief_role = role_raw2 if role_raw2 in ("closer", "setup", "middle") else "closer"
 
         comps_raw = input("Show comps? (y/n): ").strip().lower()
         run_comps = comps_raw == "y"
         print()
 
-        result = evaluate_player(name, is_pitcher=is_pitcher, relief_role=relief_role,
-                                 run_comps=run_comps, min_comps=3)
+        result = evaluate_player(name, relief_role=relief_role, run_comps=run_comps, min_comps=3)
 
         if result.get("error"):
             print(f"ERROR: {result['error']}")
-            print("  Check spelling. Add --pitcher flag for pitchers via CLI.\n")
+            print("  Check spelling.\n")
             continue
 
         print_report(result["player_name"], result["zips_row"], result["contract"],
@@ -1708,7 +1725,7 @@ def _interactive_mode():
 def main():
     ap = argparse.ArgumentParser(description="MLB trade value calculator")
     ap.add_argument("player", nargs="*", help="Player full name (omit to enter interactive mode)")
-    ap.add_argument("--pitcher", action="store_true", help="Treat as pitcher")
+    ap.add_argument("--pitcher", action="store_true", default=None, help="Force pitcher mode (auto-detected by default)")
     ap.add_argument("--age", type=int, help="Override player age")
     ap.add_argument("--war", type=float, help="Override Year 1 WAR projection")
     ap.add_argument(
