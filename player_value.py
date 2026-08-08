@@ -57,7 +57,7 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
 # Set FWAR_XLSX_DIR env var to point to your folder. If unset, bWAR fallback is used.
 # Example: export FWAR_XLSX_DIR="$HOME/fwar_data"
 import os as _os
-ONEDRIVE_BASE = (_os.environ.get("FWAR_XLSX_DIR") or str(Path.home() / "fwar_data")) + "/"
+WAR_DATA_DIR = (_os.environ.get("FWAR_XLSX_DIR") or str(Path.home() / "fwar_data")) + "/"
 
 
 # ── Aging curve ────────────────────────────────────────────────────────────────
@@ -173,10 +173,10 @@ def fetch_bref_war_ytd(player_name, is_pitcher, year):
 # ── Local fWAR xlsx lookup (replaces broken FanGraphs leaderboard API) ─────────
 def _xlsx_path(year, is_pitcher):
     if is_pitcher:
-        double = Path(f"{ONEDRIVE_BASE}{year}__pitching_war_csv.xlsx")
-        single = Path(f"{ONEDRIVE_BASE}{year}_pitching_war_csv.xlsx")
+        double = Path(f"{WAR_DATA_DIR}{year}__pitching_war_csv.xlsx")
+        single = Path(f"{WAR_DATA_DIR}{year}_pitching_war_csv.xlsx")
         return str(double) if double.exists() else str(single)
-    return f"{ONEDRIVE_BASE}{year}_batting_war_csv.xlsx"
+    return f"{WAR_DATA_DIR}{year}_batting_war_csv.xlsx"
 
 
 def _xlsx_age_days(path):
