@@ -525,14 +525,33 @@ def fetch_bref_contract(bref_player_id):
 
 # ── Spotrac contract scraping ──────────────────────────────────────────────────
 def fetch_spotrac(player_name):
-    # /search/autocomplete/?q=NAME renders the actual player page server-side
     query = quote_plus(player_name)
     resp = requests.get(
-        f"https://www.spotrac.com/search/autocomplete/?q={query}",
-        headers=HEADERS,
-        timeout=30,
+        f"https://www.spotrac.com/search/?q={query}",
+        headers=HEADERS, timeout=30,
     )
     resp.raise_for_status()
+
+    # Search page returns named redirect links — find the one matching this player.
+    # Follow it to get the actual player contract page.
+    soup = BeautifulSoup(resp.text, "html.parser")
+    name_parts = _norm_ascii(player_name).split()
+    player_url = None
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/redirect/player/" not in href and "/mlb/player/" not in href:
+            continue
+        link_name = _norm_ascii(a.get_text(strip=True))
+        if all(p in link_name for p in name_parts):
+            player_url = href
+            break
+
+    if player_url:
+        presp = requests.get(player_url, headers=HEADERS, timeout=30)
+        presp.raise_for_status()
+        return parse_spotrac(presp.text)
+
+    # Fallback: parse the search page itself (works when search lands directly on player page)
     return parse_spotrac(resp.text)
 
 
@@ -610,9 +629,22 @@ def parse_spotrac(html):
     if has_extension_years:
         status = "signed"
         arb_year_now = None
-    elif "arb" in spotrac_status.lower() and any(c.isdigit() for c in spotrac_status):
+    elif "arb" in spotrac_status.lower():
         status = "arb"
-        arb_year_now = int(re.search(r"\d", spotrac_status).group())
+        digit_m = re.search(r"\d", spotrac_status)
+        if digit_m:
+            arb_year_now = int(digit_m.group())
+        else:
+            # "Arb Avoided" — no explicit number; infer from a future entry with "ARB N"
+            arb_year_now = None
+            for future in yearly[1:]:
+                fm = re.search(r"arb\s*(\d)", future["status"], re.IGNORECASE)
+                if fm:
+                    years_ahead = future["year"] - yearly[0]["year"]
+                    arb_year_now = int(fm.group(1)) - years_ahead
+                    break
+            if arb_year_now is None:
+                arb_year_now = 1
     elif "pre" in spotrac_status.lower():
         status = "pre-arb"
         arb_year_now = None
