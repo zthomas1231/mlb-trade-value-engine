@@ -30,6 +30,7 @@ Options:
 """
 
 import sys
+import os
 import csv
 import argparse
 import datetime
@@ -43,7 +44,7 @@ import pybaseball
 
 TRADES_CSV = Path(__file__).parent / "trades.csv"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
-ONEDRIVE_BASE = str(Path.home() / "OneDrive - Driveline Baseball") + "/"
+ONEDRIVE_BASE = (os.environ.get("FWAR_XLSX_DIR") or str(Path.home() / "fwar_data")) + "/"
 
 FIELDNAMES = [
     "trade_id", "player_name", "trade_date", "season", "trade_type",

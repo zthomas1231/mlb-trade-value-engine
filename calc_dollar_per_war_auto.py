@@ -37,7 +37,7 @@ import pybaseball
 
 pybaseball.cache.enable()
 
-FG_WAR_DIR_DEFAULT = str(Path.home() / "OneDrive - Driveline Baseball")
+FG_WAR_DIR_DEFAULT = str(Path.home() / "fwar_data")
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
