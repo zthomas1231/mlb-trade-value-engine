@@ -77,9 +77,13 @@ def project_wars(war_y1, current_age, n=3):
 
 # ── Arb salary estimation ──────────────────────────────────────────────────────
 ARB_RATES = {1: 0.40, 2: 0.60, 3: 0.80, 4: 0.90}
+# Arb panels use comparables, not WAR × $/WAR. These caps prevent inflated
+# bWAR pace estimates from producing impossible salary projections.
+ARB_SALARY_CAPS = {1: 10.0, 2: 16.0, 3: 22.0, 4: 28.0}  # $M
 
 def arb_salary(market_value_m, arb_year):
-    return market_value_m * ARB_RATES.get(arb_year, 0.40)
+    raw = market_value_m * ARB_RATES.get(arb_year, 0.40)
+    return min(raw, ARB_SALARY_CAPS.get(arb_year, 28.0))
 
 
 # ── Manual contract overrides (correct stale/incomplete API data) ──────────────
