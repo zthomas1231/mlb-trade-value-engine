@@ -1657,9 +1657,57 @@ def write_result_csv(results, path):
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
+def _interactive_mode():
+    print("\nMLB Trade Value Engine")
+    print("Press Ctrl+C or type 'q' to quit.\n")
+    while True:
+        name = input("Player name: ").strip()
+        if name.lower() in ("q", "quit", "exit", ""):
+            break
+
+        pit_raw = input("Pitcher? (y/n): ").strip().lower()
+        if pit_raw in ("q", "quit"):
+            break
+        is_pitcher = pit_raw == "y"
+
+        relief_role = None
+        if is_pitcher:
+            rel_raw = input("Reliever/closer? (y/n): ").strip().lower()
+            if rel_raw in ("q", "quit"):
+                break
+            if rel_raw == "y":
+                role_raw = input("Role — closer / setup / middle [closer]: ").strip().lower()
+                relief_role = role_raw if role_raw in ("closer", "setup", "middle") else "closer"
+
+        comps_raw = input("Show comps? (y/n): ").strip().lower()
+        run_comps = comps_raw == "y"
+        print()
+
+        result = evaluate_player(name, is_pitcher=is_pitcher, relief_role=relief_role,
+                                 run_comps=run_comps, min_comps=3)
+
+        if result.get("error"):
+            print(f"ERROR: {result['error']}")
+            print("  Check spelling. Add --pitcher flag for pitchers via CLI.\n")
+            continue
+
+        print_report(result["player_name"], result["zips_row"], result["contract"],
+                     result["control_rows"], result["current_age"], result["is_pitcher"],
+                     result["war_y1"], leverage=result["leverage"], raw_war=result["raw_war"],
+                     proj_sources=result.get("proj_sources"),
+                     small_sample_note=result.get("small_sample_note"))
+
+        if run_comps:
+            q = result["comp_query"]
+            print_comps(result["comps"], q["war"], q["age"], q["years"],
+                        q["status"], q["position"], q["salary"],
+                        expanded_mult=result["comp_expanded_mult"])
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description="MLB trade value calculator")
-    ap.add_argument("player", nargs="+", help="Player full name")
+    ap.add_argument("player", nargs="*", help="Player full name (omit to enter interactive mode)")
     ap.add_argument("--pitcher", action="store_true", help="Treat as pitcher")
     ap.add_argument("--age", type=int, help="Override player age")
     ap.add_argument("--war", type=float, help="Override Year 1 WAR projection")
@@ -1708,6 +1756,10 @@ def main():
         help="Override annual average value in $M (corrects stale contract data).",
     )
     args = ap.parse_args()
+
+    if not args.player:
+        _interactive_mode()
+        return
 
     player_name = " ".join(args.player)
 
