@@ -126,6 +126,10 @@ def lookup_player_ids(player_name):
         return None, None
     if df.empty:
         return None, None
+    # Filter to players active in recent seasons to avoid wrong matches on common names
+    recent = df[df["mlb_played_last"] >= CURRENT_YEAR - 3]
+    if not recent.empty:
+        df = recent
     row = df.iloc[0]
     fg  = row.get("key_fangraphs")
     mlb = row.get("key_mlbam")
@@ -170,6 +174,13 @@ def _xlsx_path(year, is_pitcher):
         single = Path(f"{ONEDRIVE_BASE}{year}_pitching_war_csv.xlsx")
         return str(double) if double.exists() else str(single)
     return f"{ONEDRIVE_BASE}{year}_batting_war_csv.xlsx"
+
+
+def _xlsx_age_days(path):
+    p = Path(path)
+    if not p.exists():
+        return None
+    return (datetime.datetime.now().timestamp() - p.stat().st_mtime) / 86400
 
 
 def fetch_war_from_xlsx(player_name, is_pitcher, year):
@@ -797,6 +808,15 @@ _TALENT_THRESHOLDS = [
     (24, 6), (14, 5), (7, 4), (2, 3), (0, 2),
 ]
 
+# Position scarcity premium on talent_value (applied before talent tier lookup only).
+# fWAR already includes positional run adjustments; this is a separate supply/demand premium
+# reflecting how thin the trade market is at catcher specifically. Applied to tv only —
+# not the surplus table display or the contract ratio (to avoid double-counting cadj).
+# C=1.10: empirically validated — crosses the talent threshold boundary for elite catchers
+# (e.g. Rutschman 5.6 WAR: tv 39.9→43.9, crossing the tier-7 threshold at 42).
+# SS dropped after calibration showed model already overpredicts for SS arb/rental cases.
+_POSITION_SCARCITY = {"C": 1.10}
+
 # Development discount on talent_value by service class.
 # Pre-arb/arb players have meaningful bust risk; the surplus formula is optimistic
 # because it projects full career value at wWAR with no probability-of-sticking haircut.
@@ -918,7 +938,7 @@ def _contract_adj_from_ratio(ratio):
     return -3
 
 
-def calc_trade_tiers(war_y1, current_age, contract):
+def calc_trade_tiers(war_y1, current_age, contract, position=None):
     """
     Returns dict with:
       talent_value   — raw $M production value (WAR × $/WAR, discounted)
@@ -929,14 +949,22 @@ def calc_trade_tiers(war_y1, current_age, contract):
     """
     n = contract_n_years(contract)
     tv_raw = calc_talent_value(war_y1, current_age, n)
-    dev_factor = _DEVELOPMENT_FACTORS.get(contract.get("status", "signed"), 1.0)
+    _status = contract.get("status", "signed")
+    _arb_yr = contract.get("arb_year_now")
+    _dev_key = f"arb{_arb_yr}" if (_status == "arb" and _arb_yr and f"arb{_arb_yr}" in _DEVELOPMENT_FACTORS) else _status
+    dev_factor = _DEVELOPMENT_FACTORS.get(_dev_key, _DEVELOPMENT_FACTORS.get(_status, 1.0))
     tv = round(tv_raw * dev_factor, 1)
     spv = calc_salary_pv(contract, current_age, war_y1)
+
+    # Position scarcity: C and SS command a market premium. Applied to tv for talent tier
+    # only — contract ratio (spv/tv) uses unscaled tv so cadj is not double-counted.
+    scarcity_factor = _POSITION_SCARCITY.get(position or "", 1.0)
+    tv_pos = round(tv * scarcity_factor, 1)
 
     # Talent tier
     tt = 1
     for threshold, tier in _TALENT_THRESHOLDS:
-        if tv >= threshold:
+        if tv_pos >= threshold:
             tt = tier
             break
 
@@ -1087,7 +1115,7 @@ def _aging_arc_summary(control_rows, current_age):
 
 
 # ── Output ─────────────────────────────────────────────────────────────────────
-def print_report(player_name, zips_row, contract, control_rows, current_age, is_pitcher, war_y1, leverage=1.0, raw_war=None, proj_sources=None):
+def print_report(player_name, zips_row, contract, control_rows, current_age, is_pitcher, war_y1, leverage=1.0, raw_war=None, proj_sources=None, small_sample_note=None):
     team = zips_row.get("Team", "?")
     pos = "P" if is_pitcher else zips_row.get("_position", zips_row.get("minpos", "?"))
     sep = "=" * 70
@@ -1179,7 +1207,11 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     tv_low  = trade_value_for_war(war_y1 - 1.0, current_age, contract)
     tv_high = trade_value_for_war(war_y1 + 1.0, current_age, contract)
     n_negative = sum(1 for r in control_rows if r["surplus"] < 0)
-    tiers = calc_trade_tiers(war_y1, current_age, contract)
+    _rpt_raw_pos = zips_row.get("_position", "") or ""
+    _rpt_pos_group = "OF" if _rpt_raw_pos.upper() in ("LF", "CF", "RF") else _rpt_raw_pos.upper() or None
+    if _rpt_pos_group not in ("SP", "RP", "C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"):
+        _rpt_pos_group = None
+    tiers = calc_trade_tiers(war_y1, current_age, contract, position=_rpt_pos_group)
 
     print()
     print(f"  Total Discounted Surplus  : ${total_surplus:.1f}M")
@@ -1238,6 +1270,8 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
     else:
         war_note = "WAR source: local fWAR xlsx or manual override"
     flags = [war_note]
+    if small_sample_note:
+        flags.append(small_sample_note)
     if is_pitcher and leverage == 1.0:
         flags.append("RP/SP: leverage not applied — add --relief-role {closer|setup|middle} for relievers")
     if is_pitcher:
@@ -1285,20 +1319,108 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
             print(*a)
 
     log(f"\nLooking up {player_name!r}...")
-    fg_id, mlbam_id = lookup_player_ids(player_name)
+    fg_id, mlbam_id = None, None
+
+    # Primary: search FanGraphs xlsx — authoritative for active current-season players.
+    # Checks the expected position file first, then the other. Xlsx has correct PlayerId + MLBAMID.
+    _norm_name = unicodedata.normalize("NFKD", player_name).encode("ascii", "ignore").decode().lower()
+    _parts = _norm_name.split()
+    for _pit in ([is_pitcher, not is_pitcher] if is_pitcher is not None else [False, True]):
+        _xp = _xlsx_path(CURRENT_YEAR, _pit)
+        if not Path(_xp).exists():
+            continue
+        _xdf = pd.read_excel(_xp, header=0)
+        for _, _xrow in _xdf.iterrows():
+            _xname = unicodedata.normalize("NFKD", str(_xrow.iloc[0])).encode("ascii", "ignore").decode().lower()
+            if all(p in _xname for p in _parts):
+                _fgid = _xrow.get("PlayerId")
+                _mlb  = _xrow.get("MLBAMID")
+                if _fgid is not None and not (isinstance(_fgid, float) and math.isnan(_fgid)):
+                    fg_id = str(int(_fgid))
+                if _mlb is not None and not (isinstance(_mlb, float) and math.isnan(_mlb)):
+                    mlbam_id = int(_mlb)
+                log(f"  Matched via xlsx: {_xrow.iloc[0]}")
+                break
+        if fg_id or mlbam_id:
+            break
+
+    # Fallback: pybaseball Chadwick Bureau when player not in xlsx (injured, DL, etc.)
+    if fg_id is None and mlbam_id is None:
+        fg_id, mlbam_id = lookup_player_ids(player_name)
+
     log(f"  FanGraphs ID: {fg_id}" if fg_id else "  FanGraphs ID not found")
 
     war_y1 = war_override
     proj_sources = {}
     _proj_rows = {}
     _bref_pid = None   # set when bref WAR fetch succeeds; reused for contract lookup
+    _small_sample_note = None
 
     if war_y1 is None:
-        # Current-year bWAR from Baseball Reference (not Cloudflare-blocked) — annualize from pace
-        log(f"  Fetching {CURRENT_YEAR} YTD bWAR from Baseball Reference...")
-        bref_war, bref_g, bref_pid_tmp = fetch_bref_war_ytd(player_name, is_pitcher, CURRENT_YEAR)
+        # 1. Local FanGraphs xlsx (fWAR) — primary source when file is present; consistent units with comps db
+        _xlsx_p = Path(_xlsx_path(CURRENT_YEAR, is_pitcher))
+        w, xlsx_g = fetch_war_from_xlsx(player_name, is_pitcher, CURRENT_YEAR)
+        if w is not None:
+            _xlsx_days = _xlsx_age_days(_xlsx_p)
+            if _xlsx_days is not None and _xlsx_days > 7:
+                _xlsx_mtime = datetime.datetime.fromtimestamp(_xlsx_p.stat().st_mtime).strftime("%Y-%m-%d")
+                log(f"  [!] fWAR xlsx is {int(_xlsx_days)}d old (last updated {_xlsx_mtime}) — re-download from FanGraphs for current data")
+            # Pitchers: annualize using team games played (same denominator as bref annualization).
+            # Batters: annualize using the player's own game count from the xlsx.
+            denom = GAMES_PLAYED if is_pitcher else (xlsx_g or GAMES_PLAYED)
+            is_partial = (is_pitcher and GAMES_PLAYED < 155) or (not is_pitcher and xlsx_g and xlsx_g < 150)
+            w_annual = round(w * (162 / denom), 2) if is_partial else w
+
+            # Small-sample detection: auto-compute Marcel wWAR from prior seasons when G is too low
+            # to trust annualized pace. Thresholds: SP <10 GS, RP <15 G, hitter <30 G.
+            small_thresh = 15 if (is_pitcher and relief_role) else (10 if is_pitcher else 30)
+            g_unit = "GS" if (is_pitcher and not relief_role) else "G"
+            if xlsx_g is not None and xlsx_g < small_thresh:
+                prior = []
+                for yr in (CURRENT_YEAR - 1, CURRENT_YEAR - 2, CURRENT_YEAR - 3):
+                    w_pr, _ = fetch_war_from_xlsx(player_name, is_pitcher, yr)
+                    if w_pr is not None:
+                        prior.append((yr, w_pr))
+                    else:
+                        break  # stop at first missing year — don't skip gaps
+                if prior:
+                    wts = [5, 4, 3][: len(prior)]
+                    wwar = round(sum(prior[i][1] * wts[i] for i in range(len(prior))) / sum(wts), 2)
+                    prior_str = ", ".join(f"{yr}={wp:.1f}" for yr, wp in prior)
+                    log(f"  Small sample ({xlsx_g} {g_unit}) → wWAR {wwar:.2f} ({prior_str})")
+                    war_y1 = wwar
+                    proj_sources[f"{CURRENT_YEAR} fWAR (wWAR)"] = wwar
+                    _small_sample_note = (
+                        f"Small sample ({xlsx_g} {g_unit} in {CURRENT_YEAR}) — "
+                        f"wWAR {wwar:.2f} auto-computed from prior seasons ({prior_str}). "
+                        f"Use --war to override."
+                    )
+                else:
+                    log(f"  {CURRENT_YEAR} fWAR (annualized, small sample {xlsx_g} {g_unit}): {w_annual}")
+                    war_y1 = w_annual
+                    proj_sources[f"{CURRENT_YEAR} fWAR (pace)"] = w_annual
+                    _small_sample_note = (
+                        f"Small sample ({xlsx_g} {g_unit} in {CURRENT_YEAR}) — "
+                        f"annualized pace unreliable. Use --war to supply a better estimate."
+                    )
+            elif is_partial:
+                log(f"  {CURRENT_YEAR} fWAR (annualized): {w_annual}")
+                proj_sources[f"{CURRENT_YEAR} fWAR (pace)"] = w_annual
+                war_y1 = w_annual
+            else:
+                log(f"  {CURRENT_YEAR} fWAR: {w}")
+                proj_sources[f"{CURRENT_YEAR} fWAR"] = w
+                war_y1 = w
+
+    # Always fetch bref data to get _bref_pid for contract lookup, even when xlsx provided WAR.
+    log(f"  Fetching {CURRENT_YEAR} YTD bWAR from Baseball Reference...")
+    bref_war, bref_g, bref_pid_tmp = fetch_bref_war_ytd(player_name, is_pitcher, CURRENT_YEAR)
+    if bref_pid_tmp:
+        _bref_pid = bref_pid_tmp
+
+    if war_y1 is None:
+        # 2. bref bWAR YTD — fallback when FG xlsx not present or player not found
         if bref_war is not None and bref_g >= 5:
-            _bref_pid = bref_pid_tmp
             # Pitchers: SP makes 1 start per ~5 team games, so pitcher G << team games.
             # Use team GAMES_PLAYED as the season-fraction denominator for pitchers.
             # Batters: player G reflects actual playing-time pace — use directly.
@@ -1312,7 +1434,7 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
             proj_sources[f"{CURRENT_YEAR} bWAR (pace)"] = war_annual
 
     if war_y1 is None:
-        # Rest-of-season projections (preferred mid-season); annualize to full-season rate
+        # 3. Rest-of-season projections (currently 403-blocked)
         for proj_type, label in (("rzips", "ZiPS RoS"), ("rsteamer", "Steamer RoS")):
             log(f"  Fetching {label} projection...")
             row = fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id)
@@ -1328,17 +1450,12 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
             war_y1 = round(sum(proj_sources.values()) / len(proj_sources), 2)
             log(f"  Projection avg (annualized): {war_y1:.2f}")
         else:
-            # Local xlsx fallback: try current year first (annualize partial season), then prior years
-            for yr in (CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2):
-                w, g = fetch_war_from_xlsx(player_name, is_pitcher, yr)
+            # 4. Local xlsx prior years
+            for yr in (CURRENT_YEAR - 1, CURRENT_YEAR - 2):
+                w, _ = fetch_war_from_xlsx(player_name, is_pitcher, yr)
                 if w is not None:
-                    if yr == CURRENT_YEAR and g and g < 150:
-                        w = round(w * (162 / g), 2)
-                        log(f"  {yr} fWAR (annualized from {g}G): {w}")
-                        proj_sources[f"{yr} fWAR (pace)"] = w
-                    else:
-                        log(f"  {yr} fWAR: {w}")
-                        proj_sources[f"{yr} fWAR"] = w
+                    log(f"  {yr} fWAR: {w}")
+                    proj_sources[f"{yr} fWAR"] = w
                     war_y1 = w
                     break
             if war_y1 is None:
@@ -1411,16 +1528,22 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
                 if fg_contract:
                     contract = fg_contract
                     log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M  [source: FanGraphs]")
-            if contract is None or contract.get("status") == "unknown":
-                if _bref_pid:
-                    log("  Trying Baseball Reference salary page...")
-                    bref_ct = fetch_bref_contract(_bref_pid)
-                    if bref_ct:
+            # FanGraphs contract API frequently misreports arb players as "signed".
+            # If FanGraphs says "signed" but bref is available, verify with bref — bref
+            # reads actual service time and is authoritative for arb status.
+            fg_said_signed = contract is not None and contract.get("status") == "signed"
+            if (contract is None or contract.get("status") == "unknown" or fg_said_signed) and _bref_pid:
+                log("  Trying Baseball Reference salary page...")
+                bref_ct = fetch_bref_contract(_bref_pid)
+                if bref_ct:
+                    # Prefer bref when it returns arb (overrides FanGraphs "signed" misreport).
+                    # Keep FanGraphs when bref also says signed — FanGraphs is more up-to-date on extensions.
+                    if bref_ct.get("status") == "arb" or contract is None or contract.get("status") == "unknown":
                         contract = bref_ct
                         log(f"  Status: {contract['status']} | AAV: ${contract['aav']:.2f}M | {contract['_years_override']} yr(s) remaining  [source: bref]")
-                if contract is None or contract.get("status") == "unknown":
-                    contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
-                    log("  No contract data found — using pre-arb defaults")
+            if contract is None or contract.get("status") == "unknown":
+                contract = {"status": "pre-arb", "salaries": [], "yearly": [], "options": [], "service_time": 0.0, "aav": 0.0}
+                log("  No contract data found — using pre-arb defaults")
 
     # Contract overrides (correct stale API data)
     if years_override is not None:
@@ -1439,16 +1562,16 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
         leverage = 1.0
     effective_war = round(raw_war * leverage, 2)
 
-    n_years      = contract_n_years(contract)
-    war_projs    = project_wars(effective_war, current_age, n=n_years)
-    control_rows = build_control_years(contract, current_age, war_projs)
-    tiers        = calc_trade_tiers(effective_war, current_age, contract)
-
-    # Position + status for comps query
+    # Position + status for comps query and scarcity premium
     raw_pos   = mlb_info.get("position") or zips_row.get("_position") or ""
     pos_group = "OF" if raw_pos.upper() in ("LF", "CF", "RF") else raw_pos.upper() or None
     if pos_group not in ("SP", "RP", "C", "1B", "2B", "3B", "SS", "OF", "DH", "IF"):
         pos_group = ("RP" if relief_role else "SP") if is_pitcher else None
+
+    n_years      = contract_n_years(contract)
+    war_projs    = project_wars(effective_war, current_age, n=n_years)
+    control_rows = build_control_years(contract, current_age, war_projs)
+    tiers        = calc_trade_tiers(effective_war, current_age, contract, position=pos_group)
 
     cs      = contract["status"]
     arb_yr  = contract.get("arb_year_now")
@@ -1479,6 +1602,7 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
         "war_y1":             effective_war,
         "raw_war":            raw_war,
         "proj_sources":       proj_sources,
+        "small_sample_note":  _small_sample_note,
         "leverage":           leverage,
         "tiers":              tiers,
         "comps":              comps,
@@ -1622,7 +1746,8 @@ def main():
     print_report(result["player_name"], result["zips_row"], result["contract"],
                  result["control_rows"], result["current_age"], result["is_pitcher"],
                  result["war_y1"], leverage=result["leverage"], raw_war=result["raw_war"],
-                 proj_sources=result.get("proj_sources"))
+                 proj_sources=result.get("proj_sources"),
+                 small_sample_note=result.get("small_sample_note"))
 
     if args.comps:
         q = result["comp_query"]
