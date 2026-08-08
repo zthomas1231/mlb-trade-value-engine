@@ -329,6 +329,10 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 - [fWAR vs. bWAR: What's the Difference? — FanGraphs Library](https://library.fangraphs.com/war/differences-fwar-rwar/) — The specific splits between FIP-based and RA9-based pitching WAR, and UZR vs. DRS for defense.
 - [Baseball-Reference WAR Explained](https://www.baseball-reference.com/about/war_explained.shtml) — Baseball Reference's own documentation of bWAR, including the RA9 pitcher component this model uses as its fallback WAR source when a player is absent from the local fWAR xlsx.
 
+**Aging curves**
+- [Aging Curve — FanGraphs Library](https://library.fangraphs.com/the-beginners-guide-to-aging-curves/) — Foundational primer: what an aging curve represents, how peak age is estimated, and why the average improvement/decline pattern holds across the league. The basis for the +0.25/yr pre-27, flat 27–30, −0.50 through 33, −0.75 after curve used in this model.
+- [Pitcher Aging Curves: Introduction — FanGraphs](https://blogs.fangraphs.com/pitcher-aging-curves-introduction/) — Multi-part series on pitcher-specific aging, centered on velocity decline. Relevant because pitcher and hitter aging trajectories differ — pitchers typically decline earlier and more sharply.
+
 **$/WAR and surplus value**
 - [What Are Teams Paying Per WAR in Free Agency? — FanGraphs (2026)](https://blogs.fangraphs.com/what-are-teams-paying-for-a-win-in-free-agency-2026-edition/) — Annual calibration of the free agent market cost per win. The source for $/WAR benchmarks.
 - [Methodology and Calculations of Dollars per WAR — Hardball Times](https://tht.fangraphs.com/methodology-and-calculations-of-dollars-per-war/) — Matt Swartz's foundational work on deriving $/WAR from FA contracts and why a linear relationship holds.
