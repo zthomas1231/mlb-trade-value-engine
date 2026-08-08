@@ -256,8 +256,8 @@ def fetch_fg_projection(player_name, is_pitcher, proj_type, fg_id=None):
         f"?type={proj_type}&stats={stats}&pos=all&team=0&players=0"
     )
     resp = requests.get(url, headers=HEADERS, timeout=30)
-    if resp.status_code == 403:
-        return None   # FanGraphs blocking automated access; caller falls through to local xlsx
+    if resp.status_code == 403 or resp.status_code >= 500:
+        return None   # FanGraphs blocking or server error; caller falls through to bWAR
     resp.raise_for_status()
     data = resp.json()
 
