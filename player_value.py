@@ -1305,7 +1305,7 @@ def print_report(player_name, zips_row, contract, control_rows, current_age, is_
 
 # ── Shared compute ─────────────────────────────────────────────────────────────
 def evaluate_player(player_name, is_pitcher=False, age_override=None, war_override=None,
-                    use_spotrac=False, fg_csv_path=None, relief_role=None,
+                    use_spotrac=True, fg_csv_path=None, relief_role=None,
                     leverage_override=None, trade_type=None, run_comps=False,
                     min_comps=3, quiet=False,
                     gs=None, g=None, years_override=None, aav_override=None):
@@ -1712,8 +1712,8 @@ def main():
     ap.add_argument("--age", type=int, help="Override player age")
     ap.add_argument("--war", type=float, help="Override Year 1 WAR projection")
     ap.add_argument(
-        "--spotrac", action="store_true",
-        help="Force Spotrac scraping for contract data (default: FanGraphs API)",
+        "--no-spotrac", action="store_true", dest="no_spotrac",
+        help="Use FanGraphs API for contract data instead of Spotrac (faster but misses recent extensions)",
     )
     ap.add_argument(
         "--fg-csv", metavar="PATH",
@@ -1768,7 +1768,7 @@ def main():
         is_pitcher=args.pitcher,
         age_override=args.age,
         war_override=args.war,
-        use_spotrac=args.spotrac,
+        use_spotrac=not args.no_spotrac,
         fg_csv_path=args.fg_csv,
         relief_role=args.relief_role,
         leverage_override=args.leverage,
