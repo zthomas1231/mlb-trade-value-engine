@@ -785,8 +785,9 @@ def build_control_years(contract, current_age, war_projections):
                 salary_type = f"arb{min(arb_yr, 3)} (est.)"
         elif status == "arb":
             arb_yr = arb_year_now + i
-            if arb_yr <= 3:
-                salary = arb_salary(market_value, arb_yr)
+            total_arb = contract.get("total_arb_years") or 3
+            if arb_yr <= total_arb:
+                salary = arb_salary(market_value, min(arb_yr, 4))
                 salary_type = f"arb{arb_yr} (est.)"
             else:
                 salary = market_value
