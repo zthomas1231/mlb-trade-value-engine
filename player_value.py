@@ -192,24 +192,31 @@ def _xlsx_age_days(path):
 
 def fetch_war_from_xlsx(player_name, is_pitcher, year):
     """
-    Look up fWAR from local OneDrive xlsx (qual=0). Returns (war, games) or (None, None).
-    Column layout: WAR at index 21 (bat) / 20 (pit); G at index 2 (bat) / 5 (pit).
+    Look up fWAR from local xlsx (qual=0 FanGraphs export). Returns (war, games) or (None, None).
+    Finds WAR and G/GS by column name; falls back to legacy hardcoded indices if absent.
     """
     path = _xlsx_path(year, is_pitcher)
     if not Path(path).exists():
         return None, None
     df = pd.read_excel(path, header=0)
-    war_idx = 20 if is_pitcher else 21
-    g_idx   =  5 if is_pitcher else  2
+    cols = list(df.columns)
+
+    war_idx = cols.index("WAR") if "WAR" in cols else (20 if is_pitcher else 21)
+    if is_pitcher:
+        g_col = "GS" if "GS" in cols else ("G" if "G" in cols else None)
+    else:
+        g_col = "G" if "G" in cols else None
+    g_idx = cols.index(g_col) if g_col else None
 
     parts = _norm_ascii(player_name).split()
     for _, row in df.iterrows():
         if all(p in _norm_ascii(row.iloc[0]) for p in parts):
             try:
                 war = float(row.iloc[war_idx])
-                g   = int(row.iloc[g_idx])
-                if not math.isnan(war):
-                    return round(war, 1), g
+                if math.isnan(war):
+                    continue
+                g = int(row.iloc[g_idx]) if g_idx is not None else 162
+                return round(war, 1), g
             except (ValueError, TypeError):
                 continue
     return None, None
