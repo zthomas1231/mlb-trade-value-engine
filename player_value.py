@@ -52,7 +52,13 @@ GAMES_PLAYED    = 105
 GAMES_REMAINING = 162 - GAMES_PLAYED   # 57
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TradeValueEngine/1.0)"}
-ONEDRIVE_BASE = str(Path.home() / "OneDrive - Driveline Baseball") + "/"
+
+# Directory containing the fWAR xlsx files (2026_batting_war_csv.xlsx etc.).
+# Set FWAR_XLSX_DIR env var to point anywhere. Defaults to OneDrive location used
+# at Driveline. If unset and the default doesn't exist, bWAR fallback is used instead.
+import os as _os
+ONEDRIVE_BASE = (_os.environ.get("FWAR_XLSX_DIR") or
+                 str(Path.home() / "OneDrive - Driveline Baseball")) + "/"
 
 
 # ── Aging curve ────────────────────────────────────────────────────────────────

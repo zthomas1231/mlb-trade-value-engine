@@ -27,9 +27,9 @@ Aging curve       = +0.25/yr pre-27, flat 27–30, −0.50/yr 31–33, −0.75/y
 
 Surplus comes from different places, and the source matters. A pre-arb player earning $750K on a 4-WAR season generates surplus almost entirely from being cheap. A signed player at $12M producing 5 WAR generates surplus from performance outpacing the contract. Both can arrive at the same dollar figure — but how they got there shapes how a trade market prices them.
 
-$/WAR is calibrated from signed free agent contracts matched to 3-year trailing WAR averages. The controllability discount (0.875×) reflects a real market dynamic: a player under team control can't opt out, so the acquiring team accepts a slight discount relative to a freely available FA. The aging curve (+0.25 pre-27, flat 27–30, −0.50 through 33, −0.75 after) is applied uniformly — it doesn't account for individual profiles, which is a known limitation. Projections use Baseball Reference bWAR (annualized from YTD pace) as the primary source, falling back to local FanGraphs projection files (THE BAT X / ZiPS) when live data is unavailable.
+$/WAR is calibrated from signed free agent contracts matched to 3-year trailing WAR averages. The controllability discount (0.875×) reflects a real market dynamic: a player under team control can't opt out, so the acquiring team accepts a slight discount relative to a freely available FA. The aging curve (+0.25 pre-27, flat 27–30, −0.50 through 33, −0.75 after) is applied uniformly — it doesn't account for individual profiles, which is a known limitation. Projections use a local FanGraphs fWAR xlsx (downloaded from FanGraphs leaderboards) as the primary source, keeping units consistent with the comps database. Baseball Reference bWAR (annualized from YTD pace) is the fallback when a player is absent from the xlsx.
 
-**A note on WAR sources.** Current-year player WAR comes from Baseball Reference bWAR; the historical comps database (trades.csv) uses FanGraphs fWAR throughout. These are not the same number. bWAR uses RA9 (actual runs allowed, adjusted for team defense) for pitchers; fWAR uses FIP (strikeouts, walks, home runs only), which strips out contact quality and defense. Soft-contact, ground ball pitchers (Valdez, Webb) show higher bWAR than fWAR — actual run prevention exceeds what FIP predicts. High-strikeout pitchers (Cole, Skenes) often show higher fWAR. The gap is typically 0.5–1.5 WAR for pitchers, smaller (±0.3–0.5) for position players where the main difference is defensive metric (UZR vs. DRS). In practice, the tier output (1–10) is broad enough that this gap rarely shifts a result by more than one tier — but for borderline pitcher evaluations, treat the model tier as a range, not a point estimate. The output flags when bWAR is in use and warns when the pitcher gap may be material.
+**A note on WAR sources.** The historical comps database (trades.csv) uses FanGraphs fWAR throughout. Live player evaluation uses a local fWAR xlsx as the primary source for unit consistency; Baseball Reference bWAR is the fallback. bWAR uses RA9 (actual runs allowed, adjusted for team defense) for pitchers; fWAR uses FIP (strikeouts, walks, home runs only), which strips out contact quality and defense. Soft-contact, ground ball pitchers (Valdez, Webb) show higher bWAR than fWAR — actual run prevention exceeds what FIP predicts. High-strikeout pitchers (Cole, Skenes) often show higher fWAR. The gap is typically 0.5–1.5 WAR for pitchers, smaller (±0.3–0.5) for position players where the main difference is defensive metric (UZR vs. DRS). In practice, the tier output (1–10) is broad enough that this gap rarely shifts a result by more than one tier — but for borderline pitcher evaluations, treat the model tier as a range, not a point estimate. The output flags the WAR source used and warns when the pitcher gap may be material.
 
 **wWAR** — the primary matching field for historical comps — is a recency-weighted average of the three seasons before the trade (Marcel-style 5/4/3 weights, most recent season heaviest). This mirrors how front offices actually evaluate trade targets: they care about who a player is now, not a career average. The 2020 COVID season slot is skipped entirely and weights are redistributed.
 
@@ -215,10 +215,25 @@ Open in VS Code or Jupyter: `jupyter notebook trade_value_engine.ipynb`
 ## Installation
 
 ```bash
-pip install pybaseball requests beautifulsoup4
+pip install -r requirements.txt
 ```
 
 Python 3.10+ required.
+
+### fWAR data (optional but recommended)
+
+The model uses FanGraphs fWAR as its primary WAR source for unit consistency with the comps database. This requires a manual download from FanGraphs leaderboards (a FanGraphs+ subscription provides full leaderboard access).
+
+1. Go to FanGraphs Leaderboards → Batting (or Pitching) → set Min PA/IP to 0 → export CSV
+2. Save the files as `2026_batting_war_csv.xlsx` and `2026_pitching_war_csv.xlsx`
+3. Point the model at the directory containing those files:
+
+```bash
+# Set once in your shell profile, or prefix each command:
+export FWAR_XLSX_DIR="/path/to/your/xlsx/folder"
+```
+
+Without this, the model falls back to Baseball Reference bWAR (fetched live via pybaseball) — fully functional but with slight WAR unit differences vs. the comps database.
 
 ---
 
