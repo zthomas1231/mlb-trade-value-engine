@@ -791,7 +791,20 @@ def build_control_years(contract, current_age, war_projections):
             arb_yr = arb_year_now + i
             total_arb = contract.get("total_arb_years") or 3
             if arb_yr <= total_arb:
-                salary = arb_salary(market_value, min(arb_yr, 4))
+                # Anchor to last known Spotrac salary + realistic raise rather than
+                # WAR × rate, which breaks when bWAR pace is inflated over a short sample.
+                _ARB_RAISE = {2: 0.40, 3: 0.30, 4: 0.20}
+                prior_salaries = [
+                    r["salary_m"] for r in contract.get("yearly", [])
+                    if r.get("salary_m") is not None and r["year"] < yr
+                ]
+                if prior_salaries:
+                    raise_factor = 1.0
+                    for step_yr in range(arb_year_now + 1, arb_yr + 1):
+                        raise_factor *= 1 + _ARB_RAISE.get(step_yr, 0.25)
+                    salary = min(prior_salaries[-1] * raise_factor, ARB_SALARY_CAPS[min(arb_yr, 4)])
+                else:
+                    salary = arb_salary(market_value, min(arb_yr, 4))
                 salary_type = f"arb{arb_yr} (est.)"
             else:
                 salary = market_value
