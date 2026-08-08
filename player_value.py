@@ -26,6 +26,9 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import quote_plus
 
+def _norm_ascii(s):
+    return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
+
 import pandas as pd
 
 import requests
@@ -147,16 +150,11 @@ def fetch_bref_war_ytd(player_name, is_pitcher, year):
     Returns (war_ytd, games, bref_player_id) or (None, None, None). Caller annualizes.
     bWAR ≠ fWAR — note the gap when displaying, especially for relievers.
     """
-    import unicodedata
-
-    def _norm(s):
-        return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
-
     func = pybaseball.bwar_pitch if is_pitcher else pybaseball.bwar_bat
     df = func(return_all=True)
     df = df[df["year_ID"] == year]
-    parts = _norm(player_name).split()
-    mask = df["name_common"].apply(lambda s: all(p in _norm(s) for p in parts))
+    parts = _norm_ascii(player_name).split()
+    mask = df["name_common"].apply(lambda s: all(p in _norm_ascii(s) for p in parts))
     rows = df[mask]
     if rows.empty:
         return None, None, None
@@ -195,12 +193,9 @@ def fetch_war_from_xlsx(player_name, is_pitcher, year):
     war_idx = 20 if is_pitcher else 21
     g_idx   =  5 if is_pitcher else  2
 
-    def _ascii(s):
-        return unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode().lower()
-
-    parts = _ascii(player_name).split()
+    parts = _norm_ascii(player_name).split()
     for _, row in df.iterrows():
-        if all(p in _ascii(row.iloc[0]) for p in parts):
+        if all(p in _norm_ascii(row.iloc[0]) for p in parts):
             try:
                 war = float(row.iloc[war_idx])
                 g   = int(row.iloc[g_idx])
@@ -1323,15 +1318,14 @@ def evaluate_player(player_name, is_pitcher=False, age_override=None, war_overri
 
     # Primary: search FanGraphs xlsx — authoritative for active current-season players.
     # Checks the expected position file first, then the other. Xlsx has correct PlayerId + MLBAMID.
-    _norm_name = unicodedata.normalize("NFKD", player_name).encode("ascii", "ignore").decode().lower()
-    _parts = _norm_name.split()
+    _parts = _norm_ascii(player_name).split()
     for _pit in ([is_pitcher, not is_pitcher] if is_pitcher is not None else [False, True]):
         _xp = _xlsx_path(CURRENT_YEAR, _pit)
         if not Path(_xp).exists():
             continue
         _xdf = pd.read_excel(_xp, header=0)
         for _, _xrow in _xdf.iterrows():
-            _xname = unicodedata.normalize("NFKD", str(_xrow.iloc[0])).encode("ascii", "ignore").decode().lower()
+            _xname = _norm_ascii(_xrow.iloc[0])
             if all(p in _xname for p in _parts):
                 _fgid = _xrow.get("PlayerId")
                 _mlb  = _xrow.get("MLBAMID")

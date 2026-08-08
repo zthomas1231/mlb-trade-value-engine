@@ -290,7 +290,7 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 - **ERA/WAR divergence for recent role changes.** A starter who converted to reliever carries their starter history in wWAR. The leverage adjustment helps, but one season of RP data is not enough to fully reprice a player.
 - **Aging curve is uniform.** The per-year WAR deltas do not vary by player type. A contact hitter, power hitter, and pitcher age differently in practice.
 - **Comps database is 2015–2026.** Pre-2015 market conditions differ enough to exclude.
-- **Mixed WAR sources.** The historical comps database (trades.csv) uses FanGraphs fWAR throughout — fWAR is the standard in surplus value research and FanGraphs bulk historical data is cleanly available. Live player evaluation uses Baseball Reference bWAR (annualized from YTD pace) because FanGraphs blocks programmatic access to live data; bWAR is the only reliable real-time source. The fallback is local fWAR projection files (THE BAT X / ZiPS), which are pre-season estimates that don't update mid-season. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting pitcher results.
+- **Mixed WAR sources.** The historical comps database (trades.csv) uses FanGraphs fWAR throughout. Live player evaluation uses a local FanGraphs fWAR xlsx (downloaded manually from FanGraphs leaderboards) as the primary source, keeping units consistent with the comps database. Baseball Reference bWAR (annualized from YTD pace) is the fallback when a player is absent from the xlsx (injury, DL). FanGraphs blocks programmatic access to live leaderboard data, so the xlsx requires periodic manual re-download. bWAR and fWAR diverge most for relievers and pitchers with extreme strand rates — note any gap > 1.0 WAR when interpreting pitcher results.
 ---
 
 ## Further Reading
@@ -298,7 +298,7 @@ The one case where this gets messy is arb players. Arb salaries reset toward mar
 **WAR methodology**
 - [What is WAR? — FanGraphs Library](https://library.fangraphs.com/misc/war/) — The foundation: what WAR measures, how replacement level is set, and why the stat exists.
 - [fWAR vs. bWAR: What's the Difference? — FanGraphs Library](https://library.fangraphs.com/war/differences-fwar-rwar/) — The specific splits between FIP-based and RA9-based pitching WAR, and UZR vs. DRS for defense.
-- [Baseball-Reference WAR Explained](https://www.baseball-reference.com/about/war_explained.shtml) — Baseball Reference's own documentation of bWAR, including the RA9 pitcher component this model uses as its primary WAR source.
+- [Baseball-Reference WAR Explained](https://www.baseball-reference.com/about/war_explained.shtml) — Baseball Reference's own documentation of bWAR, including the RA9 pitcher component this model uses as its fallback WAR source when a player is absent from the local fWAR xlsx.
 
 **$/WAR and surplus value**
 - [What Are Teams Paying Per WAR in Free Agency? — FanGraphs (2026)](https://blogs.fangraphs.com/what-are-teams-paying-for-a-win-in-free-agency-2026-edition/) — Annual calibration of the free agent market cost per win. The source for $/WAR benchmarks.
