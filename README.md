@@ -137,37 +137,38 @@ $ python player_value.py "Xander Bogaerts"
   WAR      : 2.0 (2026 bWAR (pace))
   Contract : SIGNED
   AAV      : $25.45M
-  Service  : 9.042 years
-  NTC      : Full no-trade clause
+  Options  : player option (2033, $27.5M)
+  Service  : 12.000 years
 
-  Context  : Signed through 2034 at $25.45M AAV — above market
-             (179% of current market value — aging risk). 8 yr(s) of control.
+  Context  : Signed through 2033 at $25.45M AAV — above market
+             (179% of current market value — aging risk). 8 year(s) of control remaining.
 
   Surplus Value Breakdown
   ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
   Year   Age   WAR      Market     Salary Type         Surplus    Disc.
   ──────────────────────────────────────────────────────────────────────
-  2026   33    2.0   $   13.9M $ 25.000M fangraphs   $ -11.1M $ -11.1M ◄
-  2027   34    1.2   $    8.7M $ 25.000M fangraphs   $ -16.3M $ -15.5M ◄
-  2028   35    0.5   $    3.4M $ 25.000M fangraphs   $ -21.6M $ -19.6M ◄
-  2029   36    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -21.6M ◄
-  2030   37    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -20.6M ◄
-  2031   38    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -19.6M ◄
-  2032   39    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -18.7M ◄
-  2033   40    0.0   $    0.0M $ 25.000M fangraphs   $ -25.0M $ -17.8M ◄
+  2026   33    2.0   $   13.9M $ 25.000M signed      $ -11.1M $ -11.1M ◄
+  2027   34    1.2   $    8.7M $ 27.500M signed      $ -18.8M $ -17.9M ◄
+  2028   35    0.5   $    3.4M $ 27.500M signed      $ -24.1M $ -21.8M ◄
+  ──────────────  WAR at floor — no projected value, salary continues  ──────────────
+  2029   36    0.0   $    0.0M $ 27.500M signed      $ -27.5M $ -23.8M ◄
+  2030   37    0.0   $    0.0M $ 27.500M signed      $ -27.5M $ -22.6M ◄
+  2031   38    0.0   $    0.0M $ 27.500M signed      $ -27.5M $ -21.5M ◄
+  2032   39    0.0   $    0.0M $ 27.500M signed      $ -27.5M $ -20.5M ◄
+  2033   40    0.0   $    0.0M $ 27.500M signed      $ -27.5M $ -19.5M ◄
   ──────────────────────────────────────────────────────────────────────
-  Total Discounted Surplus  : $-144.5M
-  Trade Value (×0.875)      : $-126.4M
+  Total Discounted Surplus  : $-158.7M
+  Trade Value (×0.875)      : $-138.9M
   Underwater years          : 8 of 8 (marked ◄)
 
   ┌─ Trade Value Assessment ────────────────────────────────────┐
   │  Talent Tier    :  5/10  average MLB contributor               │
   │  Contract       :  -3    severely overpaid                     │
-  │  Surplus Pen.   :  -3    catastrophic total surplus (-$126M)   │
-  │  Underwater Pen.:  -3    8 yr(s) negative surplus              │
-  │  Net Trade Tier :   —    salary relief — not a standard asset  │
+  │  Surplus Pen.   :  -3    catastrophic total surplus (-$139M)   │
+  │  Underwater Pen.:  -3    8 yr(s) negative surplus — burden on acquirer      │
+  │  Net Trade Tier :   —    salary relief — not a standard trade asset│
+  │  Overpay        :        $11.1M/yr above market — limits return    │
   └─────────────────────────────────────────────────────────────┘
-  [!] Tradeability limited: Full no-trade clause
 ```
 
 ---
