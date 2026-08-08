@@ -49,80 +49,77 @@ Historical comps search the database by wWAR, age, years of control, and contrac
 
 ## Sample Output
 
-Three contrasting examples — arb pitcher, arb position player, and an overpaid veteran — showing the model across different player types and contract situations.
+Three contrasting examples — arb pitcher, arb catcher, and an overpaid veteran — showing the model across different player types and contract situations.
 
-**1. Arb SP, one year of control (Logan Gilbert, SEA)**
+**1. Arb SP, two years of control (Logan Gilbert, SEA)**
 
 ```
-$ python player_value.py "Logan Gilbert" --pitcher
+$ python player_value.py "Logan Gilbert"
 
 ======================================================================
   LOGAN GILBERT — ? | P | Age 29 | peak (flat)
 ======================================================================
-  WAR      : 4.2 (2026 bWAR (pace))
+  WAR      : 4.3 (2026 bWAR (pace))
   Contract : ARB
-  AAV      : $10.93M
   Service  : 4.144 years
 
-  Context  : Arb 3 of 3 — salary at 80% of $29.2M market value.
+  Context  : Arb 3 of 4 — salary estimated at 80% of $29.8M market value.
+             2 remaining arb year(s) before free agency.
              No extension signed — trade value declines at each arb step.
 
   Surplus Value Breakdown
   ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
   Year   Age   WAR      Market     Salary Type         Surplus    Disc.
   ──────────────────────────────────────────────────────────────────────
-  2026   29    4.2   $   29.2M $ 10.927M ARB 3       $  18.3M $  18.3M
-  ─────────────────────  free agent after 2026  ─────────────────────
-  2027   30    4.2   $   29.2M $ 29.190M FA (est.)   $   0.0M $   0.0M
-  2028   31    3.7   $   25.7M $ 25.690M UFA         $   0.0M $   0.0M
+  2026   29    4.3   $   29.8M $ 10.927M Arb Avoided $  18.9M $  18.9M
+  2027   30    4.3   $   29.8M $ 13.112M arb4 (est.) $  16.7M $  15.9M
   ──────────────────────────────────────────────────────────────────────
-  Total Discounted Surplus  : $18.3M
-  Trade Value (×0.875)      : $16.0M
-  Confidence Range          : $9.9M – $22.1M  (±1 WAR on Yr 1)
-
-  ┌─ Trade Value Assessment ────────────────────────────────────┐
-  │  Talent Tier    :  7/10  above-average starter                 │
-  │  Dev Discount   :        (×0.60 dev discount applied)          │
-  │  Contract       :  -1    slightly overpaid                     │
-  │  Net Trade Tier :  6     solid return — quality top-100 package│
-  └─────────────────────────────────────────────────────────────┘
-```
-
-**2. Arb 3B, two years of control (Isaac Paredes, CHC)**
-
-```
-$ python player_value.py "Isaac Paredes"
-
-======================================================================
-  ISAAC PAREDES — ? | 3B | Age 27 | peak (flat)
-======================================================================
-  WAR      : 3.9 (2026 bWAR (pace))
-  Contract : ARB
-  AAV      : $9.35M
-  Service  : 4.160 years
-  Options  : club option
-
-  Context  : Arb 3 of 3 — salary at 80% of $27.2M market value.
-             No extension signed — trade value declines at each arb step.
-
-  Surplus Value Breakdown
-  ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
-  Year   Age   WAR      Market     Salary Type         Surplus    Disc.
-  ──────────────────────────────────────────────────────────────────────
-  2026   27    3.9   $   27.2M $  9.350M ARB 3       $  17.8M $  17.8M
-  2027   28    3.9   $   27.2M $ 13.350M ARB 4       $  13.8M $  13.2M
-  ─────────────────────  free agent after 2027  ─────────────────────
-  2028   29    3.9   $   27.2M $ 27.160M UFA         $   0.0M $   0.0M
-  ──────────────────────────────────────────────────────────────────────
-  Total Discounted Surplus  : $31.0M
-  Trade Value (×0.875)      : $27.1M
-  Confidence Range          : $15.1M – $39.0M  (±1 WAR on Yr 1)
+  Total Discounted Surplus  : $34.8M
+  Trade Value (×0.875)      : $30.4M
+  Confidence Range          : $18.5M – $42.4M  (±1 WAR on Yr 1)
 
   ┌─ Trade Value Assessment ────────────────────────────────────┐
   │  Talent Tier    :  6/10  solid starter                         │
-  │  Dev Discount   :        (×0.60 dev discount applied)          │
+  │  Dev Discount   :        (×0.60 dev discount)                  │
   │  Contract       :   0    near market rate                      │
   │  Net Trade Tier :  6     solid return — quality top-100 package│
+  │  Savings        :        $18.9M/yr below market — boosts return│
+  └─────────────────────────────────────────────────────────────┘
+```
+
+**2. Arb C, two years of control (Adley Rutschman, BAL)**
+
+```
+$ python player_value.py "Adley Rutschman"
+
+======================================================================
+  ADLEY RUTSCHMAN — ? | C | Age 28 | peak (flat)
+======================================================================
+  WAR      : 4.4 (2026 bWAR (pace))
+  Contract : ARB
+  Service  : 4.000 years
+
+  Context  : Arb 2 of 3 — salary estimated at 60% of $30.7M market value.
+             2 remaining arb year(s) before free agency.
+             No extension signed — trade value declines at each arb step.
+
+  Surplus Value Breakdown
+  ($/WAR = $7.0M · discount = 5%/yr · controllability = 0.875×)
+  Year   Age   WAR      Market     Salary Type         Surplus    Disc.
+  ──────────────────────────────────────────────────────────────────────
+  2026   28    4.4   $   30.7M $  7.250M Arb Avoided $  23.4M $  23.4M
+  2027   29    4.4   $   30.7M $  9.425M arb3 (est.) $  21.2M $  20.2M
+  ──────────────────────────────────────────────────────────────────────
+  Total Discounted Surplus  : $43.6M
+  Trade Value (×0.875)      : $38.1M
+  Confidence Range          : $26.2M – $50.1M  (±1 WAR on Yr 1)
+
+  ┌─ Trade Value Assessment ────────────────────────────────────┐
+  │  Talent Tier    :  6/10  solid starter                         │
+  │  Dev Discount   :        (×0.60 dev discount)                  │
+  │  Contract       :  +1    below market                          │
+  │  Net Trade Tier :  7     strong return — top-50 prospect + quality pieces│
+  │  Savings        :        $23.4M/yr below market — boosts return│
   └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -165,9 +162,9 @@ $ python player_value.py "Xander Bogaerts"
   │  Talent Tier    :  5/10  average MLB contributor               │
   │  Contract       :  -3    severely overpaid                     │
   │  Surplus Pen.   :  -3    catastrophic total surplus (-$139M)   │
-  │  Underwater Pen.:  -3    8 yr(s) negative surplus — burden on acquirer      │
+  │  Underwater Pen.:  -3    8 yr(s) negative surplus — burden on acquirer│
   │  Net Trade Tier :   —    salary relief — not a standard trade asset│
-  │  Overpay        :        $11.1M/yr above market — limits return    │
+  │  Overpay        :        $11.1M/yr above market — limits return│
   └─────────────────────────────────────────────────────────────┘
 ```
 
