@@ -215,6 +215,11 @@ Open in VS Code or Jupyter: `jupyter notebook trade_value_engine.ipynb`
 ## Installation
 
 ```bash
+# Clone the repo
+git clone https://github.com/zthomas1231/mlb-trade-value-engine.git
+cd mlb-trade-value-engine
+
+# Install dependencies (use python3 on Mac/Linux)
 pip install -r requirements.txt
 ```
 
@@ -239,16 +244,28 @@ Without this, the model falls back to Baseball Reference bWAR (fetched live via 
 
 ## Usage
 
-### Player surplus value report
+### Interactive mode (easiest)
+
+Run with no arguments to enter interactive mode — just type player names one at a time:
 
 ```bash
-python player_value.py "Logan Gilbert" --pitcher
-python player_value.py "Isaac Paredes"
-python player_value.py "Xander Bogaerts"
-python player_value.py "Mason Miller" --pitcher --relief-role closer
-python player_value.py "Logan Gilbert" --pitcher --comps    # run comps after report
-python player_value.py "Logan Gilbert" --pitcher --comps --trade-type deadline
+python player_value.py        # Windows
+python3 player_value.py       # Mac/Linux
 ```
+
+The model auto-detects whether a player is a pitcher. For relievers, it will ask for role (closer/setup/middle).
+
+### Single player from command line
+
+```bash
+python player_value.py "Logan Gilbert"
+python player_value.py "Isaac Paredes"
+python player_value.py "Mason Miller" --relief-role closer
+python player_value.py "Logan Gilbert" --comps             # include historical trade comps
+python player_value.py "Logan Gilbert" --comps --trade-type deadline
+```
+
+`--pitcher` is optional — the model auto-detects position. Override with `--pitcher` or `--no-pitcher` if it gets it wrong.
 
 ### Find trade comparables directly
 
