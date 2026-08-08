@@ -821,12 +821,12 @@ _POSITION_SCARCITY = {"C": 1.10}
 # Pre-arb/arb players have meaningful bust risk; the surplus formula is optimistic
 # because it projects full career value at wWAR with no probability-of-sticking haircut.
 # Applied only to talent_tier and contract_adj ratio — not to the surplus table display.
-# Recalibrated 2026-07-27 via grid search on 321-trade back-test.
-# Old values (0.80/0.90/0.95) produced +1.5–1.7 tier overestimation for arb classes.
-# New values bring arb1/arb2/arb3 mean errors to ≤ ±0.2 (MAE 1.91, ±2: 71%).
+# Recalibrated 2026-08-08 via grid search on 322-trade back-test.
+# arb1 raised 0.35→0.50: grid search found 0.50 zeroes arb1 mean error (was −1.04 at 0.35).
+# Overall: MAE 1.584, ±2 79.2%, mean_err −0.298 (slight underestimate; rental structural).
 _DEVELOPMENT_FACTORS = {
     "pre-arb": 0.70,
-    "arb1":    0.35,
+    "arb1":    0.50,
     "arb":     0.60,   # FanGraphs generic "arb" — treat as arb2 equivalent
     "arb2":    0.60,
     "arb3":    0.60,
